@@ -89,6 +89,60 @@
         "RefreshToken": "days"
       },
       "UserPoolId": "local_2bvxaroM"
+    },
+    "7kr5af0oluolb88n2egax2obg": {
+      "ClientId": "7kr5af0oluolb88n2egax2obg",
+      "ClientName": "policy-manager-client",
+      "ClientSecret": "2ah1z2gwfpdhj7x8fpa5kjohv",
+      "CreationDate": "2025-07-05T19:54:14.238Z",
+      "ExplicitAuthFlows": [
+        "ADMIN_NO_SRP_AUTH",
+        "ALLOW_USER_PASSWORD_AUTH",
+        "ALLOW_REFRESH_TOKEN_AUTH"
+      ],
+      "LastModifiedDate": "2025-07-05T19:54:14.238Z",
+      "TokenValidityUnits": {
+        "AccessToken": "hours",
+        "IdToken": "minutes",
+        "RefreshToken": "days"
+      },
+      "UserPoolId": "local_61qft2Ra"
+    },
+    "5bjs54zbzq52lfo6qyyq1jdkf": {
+      "ClientId": "5bjs54zbzq52lfo6qyyq1jdkf",
+      "ClientName": "policy-manager-client",
+      "ClientSecret": "dth42rj5hgvguyi1fnweg0lj4",
+      "CreationDate": "2025-07-05T20:18:45.330Z",
+      "ExplicitAuthFlows": [
+        "ADMIN_NO_SRP_AUTH",
+        "ALLOW_USER_PASSWORD_AUTH",
+        "ALLOW_REFRESH_TOKEN_AUTH"
+      ],
+      "LastModifiedDate": "2025-07-05T20:18:45.330Z",
+      "TokenValidityUnits": {
+        "AccessToken": "hours",
+        "IdToken": "minutes",
+        "RefreshToken": "days"
+      },
+      "UserPoolId": "local_4sUfUg9k"
+    },
+    "7am6iq40572ooxrcs3ex4huqs": {
+      "ClientId": "7am6iq40572ooxrcs3ex4huqs",
+      "ClientName": "policy-manager-client",
+      "ClientSecret": "dcvxbc1akieysybkcl1akmx54",
+      "CreationDate": "2025-07-05T20:51:28.117Z",
+      "ExplicitAuthFlows": [
+        "ADMIN_NO_SRP_AUTH",
+        "ALLOW_USER_PASSWORD_AUTH",
+        "ALLOW_REFRESH_TOKEN_AUTH"
+      ],
+      "LastModifiedDate": "2025-07-05T20:51:28.117Z",
+      "TokenValidityUnits": {
+        "AccessToken": "hours",
+        "IdToken": "minutes",
+        "RefreshToken": "days"
+      },
+      "UserPoolId": "local_02tvbdIB"
     }
   }
 }

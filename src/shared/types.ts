@@ -72,6 +72,8 @@ export interface CognitoTokenPayload {
   iss: string;
   aud: string;
   token_use: string;
+  email?: string;
+  display_username?: string;
 }
 
 export interface APIResponse<T = any> {

@@ -9,24 +9,34 @@ REGION="us-east-1"
 USER_POOL_ID="local_2z3zF2el"
 CLIENT_ID="ey9gpoc5g4xpm4pl5z1rnn7bh"
 
-# Function to get auth token
+# Function to get auth token using direct HTTP call
 get_token() {
     local username=$1
     local password=$2
     
     echo "🔐 Getting authentication token for $username..."
     
-    # Authenticate user and get tokens
-    RESPONSE=$(aws cognito-idp admin-initiate-auth \
-        --user-pool-id "$USER_POOL_ID" \
-        --client-id "$CLIENT_ID" \
-        --auth-flow ADMIN_NO_SRP_AUTH \
-        --auth-parameters USERNAME="$username",PASSWORD="$password" \
-        --endpoint-url "$COGNITO_ENDPOINT" \
-        --region "$REGION" \
-        --no-cli-pager 2>/dev/null)
+    # Create the request payload using InitiateAuth instead of AdminInitiateAuth
+    local payload=$(cat <<EOF
+{
+    "AuthFlow": "USER_PASSWORD_AUTH",
+    "ClientId": "$CLIENT_ID",
+    "AuthParameters": {
+        "USERNAME": "$username",
+        "PASSWORD": "$password"
+    }
+}
+EOF
+)
     
-    if [ $? -eq 0 ]; then
+    # Make direct HTTP request to Cognito Local using InitiateAuth
+    RESPONSE=$(curl -s -X POST "$COGNITO_ENDPOINT/" \
+        -H "Content-Type: application/x-amz-json-1.1" \
+        -H "X-Amz-Target: AWSCognitoIdentityProviderService.InitiateAuth" \
+        -d "$payload")
+    
+    # Check if response contains AuthenticationResult
+    if echo "$RESPONSE" | jq -e '.AuthenticationResult' > /dev/null 2>&1; then
         ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.AuthenticationResult.AccessToken')
         ID_TOKEN=$(echo "$RESPONSE" | jq -r '.AuthenticationResult.IdToken')
         REFRESH_TOKEN=$(echo "$RESPONSE" | jq -r '.AuthenticationResult.RefreshToken')
@@ -50,6 +60,56 @@ get_token() {
         return 0
     else
         echo "❌ Authentication failed for $username"
+        echo "Response: $RESPONSE"
+        return 1
+    fi
+}
+
+# Function to get auth token using AWS CLI (fallback)
+get_token_aws_cli() {
+    local username=$1
+    local password=$2
+    
+    echo "🔐 Trying AWS CLI method for $username..."
+    
+    # Set fake AWS credentials for local use
+    export AWS_ACCESS_KEY_ID="fake"
+    export AWS_SECRET_ACCESS_KEY="fake"
+    
+    # Authenticate user and get tokens
+    RESPONSE=$(timeout 10 aws cognito-idp admin-initiate-auth \
+        --user-pool-id "$USER_POOL_ID" \
+        --client-id "$CLIENT_ID" \
+        --auth-flow ADMIN_NO_SRP_AUTH \
+        --auth-parameters USERNAME="$username",PASSWORD="$password" \
+        --endpoint-url "$COGNITO_ENDPOINT" \
+        --region "$REGION" \
+        --no-cli-pager 2>/dev/null)
+    
+    if [ $? -eq 0 ] && [ -n "$RESPONSE" ]; then
+        ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.AuthenticationResult.AccessToken')
+        ID_TOKEN=$(echo "$RESPONSE" | jq -r '.AuthenticationResult.IdToken')
+        REFRESH_TOKEN=$(echo "$RESPONSE" | jq -r '.AuthenticationResult.RefreshToken')
+        
+        echo "✅ Authentication successful!"
+        echo ""
+        echo "🎫 Access Token (use this for API calls):"
+        echo "$ACCESS_TOKEN"
+        echo ""
+        echo "🆔 ID Token:"
+        echo "$ID_TOKEN"
+        echo ""
+        echo "🔄 Refresh Token:"
+        echo "$REFRESH_TOKEN"
+        echo ""
+        echo "📋 Example API call:"
+        echo "curl -X GET http://localhost:3000/dev/policies \\"
+        echo "  -H \"Authorization: Bearer $ACCESS_TOKEN\""
+        echo ""
+        
+        return 0
+    else
+        echo "❌ AWS CLI authentication failed for $username"
         return 1
     fi
 }

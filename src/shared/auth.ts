@@ -190,15 +190,41 @@ export class TokenValidator {
         throw new Error('Invalid mock token');
       }
 
+      // For Cognito Local, access tokens might not have custom:tenant_id
+      // but we can provide a default tenant ID for local development
+      if (!decoded['custom:tenant_id']) {
+        console.log('Access token missing custom:tenant_id, using default for local development');
+        decoded['custom:tenant_id'] = '123e4567-e89b-12d3-a456-426614174000';
+      }
+
       // Ensure required fields exist
-      if (!decoded.sub || !decoded.username || !decoded['custom:tenant_id']) {
-        throw new Error('Mock token missing required fields');
+      if (!decoded.sub || !decoded.username) {
+        throw new Error('Mock token missing required fields (sub, username)');
+      }
+
+      // For Cognito Local, the username might be the user ID, try to get email from cognito:username
+      // If username looks like a UUID, it's probably the user ID, so we'll use it as-is
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(decoded.username);
+      if (isUUID) {
+        // For local development, we'll map known user IDs to display names
+        const userIdToDisplayName: { [key: string]: string } = {
+          '9d0483e1-6790-44ac-904f-d2ed877239c9': 'Admin User',
+          'dfa9b5d7-2447-49fa-8eb6-09bfa790fd71': 'Regular User'
+        };
+        
+        // Create a display username from the mapped name if available
+        const displayName = userIdToDisplayName[decoded.username];
+        if (displayName) {
+          // Override the username with the display name for better readability
+          decoded.username = displayName;
+          decoded.display_username = displayName;
+        }
       }
 
       return decoded;
     } catch (error) {
       // If token extraction fails in dev mode, create a default mock token
-      console.warn('Using default mock token for development');
+      console.warn('Using default mock token for development:', error);
       return {
         sub: 'mock-user-id',
         username: 'mockuser',
@@ -314,6 +340,61 @@ export class MockTokenGenerator {
     };
 
     return jwt.sign(payload, 'test-secret-key');
+  }
+}
+
+/**
+ * User display name helper functions
+ */
+export class UserDisplayHelper {
+  /**
+   * Map user IDs to display names for local development
+   * In production, this would query a user service or directory
+   */
+  private static userIdToDisplayName: { [key: string]: string } = {
+    '9d0483e1-6790-44ac-904f-d2ed877239c9': 'admin@example.com',
+    'dfa9b5d7-2447-49fa-8eb6-09bfa790fd71': 'user@example.com'
+  };
+
+  /**
+   * Get display name for a user ID
+   * Returns the display name if available, otherwise returns the original user ID
+   */
+  static getUserDisplayName(userId: string): string {
+    // For local development and when NODE_ENV is not set, use the mapping
+    // In production, this would make a call to a user service
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    if (!isProduction) {
+      // Use mapping for local development
+      const displayName = this.userIdToDisplayName[userId];
+      if (displayName) {
+        console.log(`UserDisplayHelper: Mapping ${userId} to ${displayName}`);
+        return displayName;
+      }
+    }
+    
+    // Return the user ID as-is if no mapping found or in production
+    return userId;
+  }
+
+  /**
+   * Transform user IDs to display names in an object
+   * Useful for transforming createdBy/updatedBy fields in policies
+   */
+  static transformUserFields<T extends Record<string, any>>(
+    obj: T,
+    fieldsToTransform: (keyof T)[] = ['createdBy', 'updatedBy']
+  ): T {
+    const transformed = { ...obj };
+    
+    for (const field of fieldsToTransform) {
+      if (transformed[field] && typeof transformed[field] === 'string') {
+        transformed[field] = this.getUserDisplayName(transformed[field] as string) as T[keyof T];
+      }
+    }
+    
+    return transformed;
   }
 }
 

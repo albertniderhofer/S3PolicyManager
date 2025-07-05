@@ -86,14 +86,6 @@ async function routeRequest(event: APIGatewayProxyEvent): Promise<any> {
   const { httpMethod, path, pathParameters } = event;
   const policyId = pathParameters?.id;
 
-  console.log('ROUTING DEBUG:', {
-    path,
-    httpMethod,
-    pathParameters,
-    isUserPoliciesPath: path === '/user-policies',
-    startsWithUserPolicies: path.startsWith('/user-policies/')
-  });
-
   // Check if this is a user-policies request
   if (path === '/user-policies' || path.startsWith('/user-policies/')) {
     console.log('ROUTING: Going to user-policies route');
@@ -139,12 +131,7 @@ async function routeUserPoliciesRequest(event: APIGatewayProxyEvent): Promise<an
 
   switch (httpMethod) {
     case 'GET':
-      if (path === '/user-policies') {
         return await getAllUserPolicies();
-      } else {
-        throw new ValidationError(`User policies path ${path} not supported`);
-      }
-
     default:
       throw new ValidationError(`HTTP method ${httpMethod} not supported for user-policies`);
   }

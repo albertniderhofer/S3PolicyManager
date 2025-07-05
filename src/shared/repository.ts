@@ -3,6 +3,7 @@ import { DynamoDBDocumentClient, QueryCommand, PutCommand, UpdateCommand, GetCom
 import { v4 as uuidv4 } from 'uuid';
 import { PolicyRecord, Policy, UserPolicyRecord, NotFoundError, ConflictError } from './types';
 import { RequestContextManager, ContextUtils } from './context';
+import { UserDisplayHelper } from './auth';
 
 /**
  * DynamoDB Repository with automatic tenant isolation
@@ -388,7 +389,9 @@ export class PolicyRepository {
    */
   private static mapRecordToPolicy(record: PolicyRecord): Policy {
     try {
-      return JSON.parse(record.PolicyContent) as Policy;
+      const policy = JSON.parse(record.PolicyContent) as Policy;
+      // Transform user IDs to display names for better readability
+      return UserDisplayHelper.transformUserFields(policy);
     } catch (error) {
       console.error(ContextUtils.createLogEntry('ERROR', 'Failed to parse policy content', { 
         policyId: record.PolicyID,
