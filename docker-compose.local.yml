@@ -1,0 +1,192 @@
+services:
+  # AWS Services
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: dynamodb-local
+    ports:
+      - "8000:8000"
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    networks:
+      - local-dev
+
+  sqs-local:
+    image: softwaremill/elasticmq-native:latest
+    container_name: sqs-local
+    ports:
+      - "9324:9324"
+    volumes:
+      - ./local-dev/elasticmq.conf:/opt/elasticmq.conf
+    networks:
+      - local-dev
+
+  cognito-local:
+    image: jagregory/cognito-local:latest
+    container_name: cognito-local
+    ports:
+      - "9229:9229"
+    environment:
+      - DEBUG=1
+    volumes:
+      - ./local-dev/cognito:/app/.cognito
+    networks:
+      - local-dev
+
+  stepfunctions-local:
+    image: amazon/aws-stepfunctions-local:latest
+    container_name: stepfunctions-local
+    ports:
+      - "8083:8083"
+    environment:
+      - LAMBDA_ENDPOINT=http://host.docker.internal:3001
+      - SQS_ENDPOINT=http://sqs-local:9324
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+    networks:
+      - local-dev
+
+  # Lambda Functions
+  api-handler:
+    build:
+      context: .
+      dockerfile: local-dev/Dockerfile.lambda
+      args:
+        LAMBDA_HANDLER: api-handler.handler
+    container_name: api-handler
+    ports:
+      - "3001:8080"
+    environment:
+      - NODE_ENV=development
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - DYNAMODB_TABLE_NAME=policy-manager-local
+      - SQS_QUEUE_URL=http://sqs-local:9324/queue/policy-events-local
+      - COGNITO_USER_POOL_ID=local_user_pool
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      - SQS_ENDPOINT=http://sqs-local:9324
+      - COGNITO_ENDPOINT=http://cognito-local:9229
+    depends_on:
+      - dynamodb-local
+      - sqs-local
+      - cognito-local
+    networks:
+      - local-dev
+
+  sqs-processor:
+    build:
+      context: .
+      dockerfile: local-dev/Dockerfile.sqs-processor
+    container_name: sqs-processor
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=development
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - STATE_MACHINE_ARN=arn:aws:states:us-east-1:123456789012:stateMachine:policy-workflow-local
+      - STEPFUNCTIONS_ENDPOINT=http://stepfunctions-local:8083
+      - SQS_QUEUE_URL=http://sqs-local:9324/000000000000/policy-events-local
+      - SQS_ENDPOINT=http://sqs-local:9324
+      - SQS_POLL_INTERVAL=5000
+      - SQS_MAX_MESSAGES=10
+      - SQS_VISIBILITY_TIMEOUT=30
+      - SQS_WAIT_TIME_SECONDS=20
+      - DYNAMODB_TABLE_NAME=policy-manager-local
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      - USER_POLICIES_TABLE_NAME=UserPolicies
+    depends_on:
+      - stepfunctions-local
+      - sqs-local
+      - dynamodb-local
+    networks:
+      - local-dev
+
+  validate-policy:
+    build:
+      context: .
+      dockerfile: local-dev/Dockerfile.lambda
+      args:
+        LAMBDA_HANDLER: validate-policy.handler
+    container_name: validate-policy
+    ports:
+      - "3003:8080"
+    environment:
+      - NODE_ENV=development
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - DYNAMODB_TABLE_NAME=policy-manager-local
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+    depends_on:
+      - dynamodb-local
+    networks:
+      - local-dev
+
+  publish-policy:
+    build:
+      context: .
+      dockerfile: local-dev/Dockerfile.lambda
+      args:
+        LAMBDA_HANDLER: publish-policy.handler
+    container_name: publish-policy
+    ports:
+      - "3004:8080"
+    environment:
+      - NODE_ENV=development
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - DYNAMODB_TABLE_NAME=policy-manager-local
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+    depends_on:
+      - dynamodb-local
+    networks:
+      - local-dev
+
+  user-policies-api:
+    build:
+      context: .
+      dockerfile: local-dev/Dockerfile.lambda
+      args:
+        LAMBDA_HANDLER: user-policies-api.handler
+    container_name: user-policies-api
+    ports:
+      - "3005:8080"
+    environment:
+      - NODE_ENV=development
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - USER_POLICIES_TABLE_NAME=UserPolicies
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      - COGNITO_USER_POOL_ID=local_user_pool
+      - COGNITO_ENDPOINT=http://cognito-local:9229
+    depends_on:
+      - dynamodb-local
+      - cognito-local
+    networks:
+      - local-dev
+
+  # API Gateway Local (using serverless-offline or similar)
+  api-gateway:
+    build:
+      context: .
+      dockerfile: local-dev/Dockerfile.api-gateway
+    container_name: api-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - API_HANDLER_URL=http://api-handler:8080
+      - USER_POLICIES_API_URL=http://user-policies-api:8080
+      - COGNITO_ENDPOINT=http://cognito-local:9229
+    depends_on:
+      - api-handler
+      - user-policies-api
+      - cognito-local
+    networks:
+      - local-dev
+
+networks:
+  local-dev:
+    driver: bridge

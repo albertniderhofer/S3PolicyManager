@@ -1,0 +1,27 @@
+FROM public.ecr.aws/lambda/nodejs:18
+
+# Install all dependencies (including dev dependencies for TypeScript compilation)
+COPY package*.json ./
+RUN npm ci
+
+# Copy source code
+COPY src/ ./src/
+COPY tsconfig.json ./
+
+# Build TypeScript
+RUN npm run build
+
+# Set the handler
+ARG LAMBDA_HANDLER
+ENV LAMBDA_HANDLER=${LAMBDA_HANDLER}
+ENV _HANDLER=dist/lambdas/${LAMBDA_HANDLER}
+
+# Copy Lambda Runtime Interface Emulator for local testing
+ADD https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie /usr/bin/aws-lambda-rie
+RUN chmod 755 /usr/bin/aws-lambda-rie
+
+# Create entrypoint script
+COPY local-dev/lambda-entrypoint.sh /lambda-entrypoint.sh
+RUN chmod +x /lambda-entrypoint.sh
+
+ENTRYPOINT ["/lambda-entrypoint.sh"]

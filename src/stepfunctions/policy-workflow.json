@@ -1,0 +1,116 @@
+{
+  "Comment": "Policy Management Workflow - Validates and publishes policy changes",
+  "StartAt": "ValidatePolicy",
+  "States": {
+    "ValidatePolicy": {
+      "Type": "Task",
+      "Resource": "${ValidatePolicyLambdaArn}",
+      "Comment": "Validate policy data and business rules",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ValidationFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "CheckValidationResult"
+    },
+    "CheckValidationResult": {
+      "Type": "Choice",
+      "Comment": "Check if policy validation passed",
+      "Choices": [
+        {
+          "Variable": "$.validationResult.isValid",
+          "BooleanEquals": true,
+          "Next": "PublishPolicy"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+    "PublishPolicy": {
+      "Type": "Task",
+      "Resource": "${PublishPolicyLambdaArn}",
+      "Comment": "Publish policy to external systems",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PublishFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "CheckPublishResult"
+    },
+    "CheckPublishResult": {
+      "Type": "Choice",
+      "Comment": "Check if policy publish succeeded",
+      "Choices": [
+        {
+          "Variable": "$.taskResults.publishPolicy.status",
+          "StringEquals": "success",
+          "Next": "WorkflowSucceeded"
+        }
+      ],
+      "Default": "PublishFailed"
+    },
+    "WorkflowSucceeded": {
+      "Type": "Pass",
+      "Comment": "Policy workflow completed successfully",
+      "Result": {
+        "status": "SUCCESS",
+        "message": "Policy workflow completed successfully"
+      },
+      "ResultPath": "$.workflowResult",
+      "End": true
+    },
+    "ValidationFailed": {
+      "Type": "Pass",
+      "Comment": "Policy validation failed",
+      "Parameters": {
+        "status": "VALIDATION_FAILED",
+        "message": "Policy validation failed",
+        "validationIssues.$": "$.validationResult.issues",
+        "error.$": "$.error"
+      },
+      "ResultPath": "$.workflowResult",
+      "Next": "NotifyFailure"
+    },
+    "PublishFailed": {
+      "Type": "Pass",
+      "Comment": "Policy publish failed",
+      "Parameters": {
+        "status": "PUBLISH_FAILED",
+        "message": "Policy publish to external systems failed",
+        "publishError.$": "$.taskResults.publishPolicy.error",
+        "error.$": "$.error"
+      },
+      "ResultPath": "$.workflowResult",
+      "Next": "NotifyFailure"
+    },
+    "NotifyFailure": {
+      "Type": "Pass",
+      "Comment": "Notify about workflow failure (placeholder for SNS/SQS notification)",
+      "Parameters": {
+        "notificationSent": true,
+        "timestamp.$": "$$.State.EnteredTime"
+      },
+      "ResultPath": "$.notification",
+      "End": true
+    }
+  }
+}

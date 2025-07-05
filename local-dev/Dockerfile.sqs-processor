@@ -1,0 +1,28 @@
+FROM node:18-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Install dependencies
+COPY package*.json ./
+RUN npm ci
+
+# Copy source code
+COPY src/ ./src/
+COPY tsconfig.json ./
+
+# Build TypeScript
+RUN npm run build
+
+# Create a service wrapper for SQS polling
+COPY local-dev/sqs-processor-service.js ./
+
+# Expose port for health checks
+EXPOSE 3002
+
+# Set environment variables
+ENV NODE_ENV=development
+ENV AWS_REGION=us-east-1
+
+# Start the SQS processor service
+CMD ["node", "sqs-processor-service.js"]
