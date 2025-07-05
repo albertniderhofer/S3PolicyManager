@@ -169,56 +169,6 @@ export class PolicyManagerStack extends cdk.Stack {
       description: 'Shared utilities and types for Policy Manager',
     });
 
-    // Lambda execution role
-    const lambdaRole = new iam.Role(this, 'LambdaExecutionRole', {
-      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
-      ],
-      inlinePolicies: {
-        PolicyManagerAccess: new iam.PolicyDocument({
-          statements: [
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                'dynamodb:GetItem',
-                'dynamodb:PutItem',
-                'dynamodb:UpdateItem',
-                'dynamodb:DeleteItem',
-                'dynamodb:Query',
-                'dynamodb:Scan',
-              ],
-              resources: [
-                this.table.tableArn,
-                `${this.table.tableArn}/index/*`,
-                userPoliciesTable.tableArn,
-                `${userPoliciesTable.tableArn}/index/*`,
-              ],
-            }),
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                'sqs:SendMessage',
-                'sqs:ReceiveMessage',
-                'sqs:DeleteMessage',
-                'sqs:GetQueueAttributes',
-              ],
-              resources: [this.queue.queueArn],
-            }),
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                'cognito-idp:GetUser',
-                'cognito-idp:ListUsers',
-                'cognito-idp:AdminGetUser',
-              ],
-              resources: [this.userPool.userPoolArn],
-            }),
-          ],
-        }),
-      },
-    });
-
     // API Handler Lambda
     const apiHandler = new lambda.Function(this, 'ApiHandler', {
       functionName: `policy-manager-api-${environment}`,
@@ -226,7 +176,6 @@ export class PolicyManagerStack extends cdk.Stack {
       handler: 'api-handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas')),
       layers: [sharedLayer],
-      role: lambdaRole,
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
       environment: {
@@ -238,6 +187,19 @@ export class PolicyManagerStack extends cdk.Stack {
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
 
+    // Grant permissions to API Handler
+    this.table.grantReadWriteData(apiHandler);
+    this.queue.grantSendMessages(apiHandler);
+    apiHandler.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'cognito-idp:GetUser',
+        'cognito-idp:ListUsers',
+        'cognito-idp:AdminGetUser',
+      ],
+      resources: [this.userPool.userPoolArn],
+    }));
+
     // User Policies API Lambda
     const userPoliciesApi = new lambda.Function(this, 'UserPoliciesApi', {
       functionName: `policy-manager-user-policies-api-${environment}`,
@@ -245,7 +207,6 @@ export class PolicyManagerStack extends cdk.Stack {
       handler: 'user-policies-api.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas')),
       layers: [sharedLayer],
-      role: lambdaRole,
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
       environment: {
@@ -257,21 +218,18 @@ export class PolicyManagerStack extends cdk.Stack {
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
 
-    // SQS Processor Lambda
-    const sqsProcessor = new lambda.Function(this, 'SqsProcessor', {
-      functionName: `policy-manager-sqs-processor-${environment}`,
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'sqs-processor.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas')),
-      layers: [sharedLayer],
-      role: lambdaRole,
-      timeout: cdk.Duration.minutes(5),
-      memorySize: 256,
-      environment: {
-        NODE_ENV: environment,
-      },
-      logRetention: logs.RetentionDays.ONE_WEEK,
-    });
+    // Grant permissions to User Policies API
+    this.table.grantReadWriteData(userPoliciesApi);
+    userPoliciesTable.grantReadWriteData(userPoliciesApi);
+    userPoliciesApi.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'cognito-idp:GetUser',
+        'cognito-idp:ListUsers',
+        'cognito-idp:AdminGetUser',
+      ],
+      resources: [this.userPool.userPoolArn],
+    }));
 
     // Validate Policy Lambda
     const validatePolicy = new lambda.Function(this, 'ValidatePolicy', {
@@ -280,7 +238,6 @@ export class PolicyManagerStack extends cdk.Stack {
       handler: 'validate-policy.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas')),
       layers: [sharedLayer],
-      role: lambdaRole,
       timeout: cdk.Duration.minutes(2),
       memorySize: 256,
       environment: {
@@ -290,6 +247,9 @@ export class PolicyManagerStack extends cdk.Stack {
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
 
+    // Grant permissions to Validate Policy
+    this.table.grantReadWriteData(validatePolicy);
+
     // Publish Policy Lambda
     const publishPolicy = new lambda.Function(this, 'PublishPolicy', {
       functionName: `policy-manager-publish-${environment}`,
@@ -297,7 +257,6 @@ export class PolicyManagerStack extends cdk.Stack {
       handler: 'publish-policy.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas')),
       layers: [sharedLayer],
-      role: lambdaRole,
       timeout: cdk.Duration.minutes(3),
       memorySize: 256,
       environment: {
@@ -306,6 +265,9 @@ export class PolicyManagerStack extends cdk.Stack {
       },
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
+
+    // Grant permissions to Publish Policy
+    this.table.grantReadWriteData(publishPolicy);
 
     // Step Functions State Machine
     const workflowDefinition = this.loadStepFunctionDefinition();
@@ -331,8 +293,21 @@ export class PolicyManagerStack extends cdk.Stack {
     validatePolicy.grantInvoke(this.stateMachine);
     publishPolicy.grantInvoke(this.stateMachine);
 
-    // Update SQS processor environment with State Machine ARN
-    sqsProcessor.addEnvironment('STATE_MACHINE_ARN', this.stateMachine.stateMachineArn);
+    // SQS Processor Lambda
+    const sqsProcessor = new lambda.Function(this, 'SqsProcessor', {
+      functionName: `policy-manager-sqs-processor-${environment}`,
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'sqs-processor.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas')),
+      layers: [sharedLayer],
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 256,
+      environment: {
+        NODE_ENV: environment,
+        STATE_MACHINE_ARN: this.stateMachine.stateMachineArn,
+      },
+      logRetention: logs.RetentionDays.ONE_WEEK,
+    });
 
     // Grant SQS processor permission to start executions
     this.stateMachine.grantStartExecution(sqsProcessor);
