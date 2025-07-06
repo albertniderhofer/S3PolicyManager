@@ -197,9 +197,7 @@ export class PolicyManagerStack extends cdk.Stack {
       functionName: `policy-manager-api-${environment}`,
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'api-handler.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas'), {
-        exclude: ['user-policies-api.ts', 'validate-policy.ts', 'publish-policy.ts', 'sqs-processor.ts']
-      }),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas/api-handler')),
       layers: [sharedLayer],
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
@@ -230,9 +228,7 @@ export class PolicyManagerStack extends cdk.Stack {
       functionName: `policy-manager-user-policies-api-${environment}`,
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'user-policies-api.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas'), {
-        exclude: ['api-handler.ts', 'validate-policy.ts', 'publish-policy.ts', 'sqs-processor.ts']
-      }),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas/user-policies-api')),
       layers: [sharedLayer],
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
@@ -263,9 +259,7 @@ export class PolicyManagerStack extends cdk.Stack {
       functionName: `policy-manager-validate-${environment}`,
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'validate-policy.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas'), {
-        exclude: ['api-handler.ts', 'user-policies-api.ts', 'publish-policy.ts', 'sqs-processor.ts']
-      }),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas/validate-policy')),
       layers: [sharedLayer],
       timeout: cdk.Duration.minutes(2),
       memorySize: 256,
@@ -284,9 +278,7 @@ export class PolicyManagerStack extends cdk.Stack {
       functionName: `policy-manager-publish-${environment}`,
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'publish-policy.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas'), {
-        exclude: ['api-handler.ts', 'user-policies-api.ts', 'validate-policy.ts', 'sqs-processor.ts']
-      }),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas/publish-policy')),
       layers: [sharedLayer],
       timeout: cdk.Duration.minutes(3),
       memorySize: 256,
@@ -395,9 +387,7 @@ export class PolicyManagerStack extends cdk.Stack {
       functionName: `policy-manager-sqs-processor-${environment}`,
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'sqs-processor.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas'), {
-        exclude: ['api-handler.ts', 'user-policies-api.ts', 'validate-policy.ts', 'publish-policy.ts']
-      }),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas/sqs-processor')),
       layers: [sharedLayer],
       timeout: cdk.Duration.minutes(5),
       memorySize: 256,
@@ -494,29 +484,12 @@ export class PolicyManagerStack extends cdk.Stack {
       authorizationType: apigateway.AuthorizationType.COGNITO,
     });
 
-    // POST /user-policies - Create new user policy
-    userPolicies.addMethod('POST', userPoliciesIntegration, {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-    });
 
     // User Policy by ID routes
     const userPolicyById = userPolicies.addResource('{id}');
     
     // GET /user-policies/{id} - Get specific user policy
     userPolicyById.addMethod('GET', userPoliciesIntegration, {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-    });
-
-    // PUT /user-policies/{id} - Update user policy
-    userPolicyById.addMethod('PUT', userPoliciesIntegration, {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-    });
-
-    // DELETE /user-policies/{id} - Delete user policy
-    userPolicyById.addMethod('DELETE', userPoliciesIntegration, {
       authorizer,
       authorizationType: apigateway.AuthorizationType.COGNITO,
     });

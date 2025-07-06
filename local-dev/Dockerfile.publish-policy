@@ -8,7 +8,7 @@ RUN npm ci
 COPY src/shared/ ./src/shared/
 
 # Copy this specific lambda function
-COPY src/lambdas/sqs-processor/ ./src/lambdas/sqs-processor/
+COPY src/lambdas/publish-policy/ ./src/lambdas/publish-policy/
 
 # Copy TypeScript config
 COPY tsconfig.json ./
@@ -17,7 +17,7 @@ COPY tsconfig.json ./
 RUN npm run build
 
 # Set the handler to the compiled JavaScript
-ENV _HANDLER=dist/lambdas/sqs-processor/sqs-processor.handler
+ENV _HANDLER=dist/lambdas/publish-policy/publish-policy.handler
 
 # Copy Lambda Runtime Interface Emulator for local testing
 ADD https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie /usr/bin/aws-lambda-rie

@@ -1,9 +1,9 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { TokenValidator } from '../shared/auth';
-import { PolicyRepository, UserPolicyRepository } from '../shared/repository';
-import { SQSService } from '../shared/sqs';
-import { SchemaValidator } from '../shared/schema';
-import { RequestContextManager, ContextUtils } from '../shared/context';
+import { TokenValidator } from '../../shared/auth';
+import { PolicyRepository, UserPolicyRepository } from '../../shared/repository';
+import { SQSService } from '../../shared/sqs';
+import { SchemaValidator } from '../../shared/schema';
+import { RequestContextManager, ContextUtils } from '../../shared/context';
 import { 
   APIResponse, 
   ErrorResponse, 
@@ -11,7 +11,7 @@ import {
   ValidationError, 
   NotFoundError, 
   ConflictError 
-} from '../shared/types';
+} from '../../shared/types';
 
 /**
  * Main API Gateway Lambda Handler

@@ -68,19 +68,24 @@ src/
 │   ├── repository.ts      # DynamoDB operations
 │   └── sqs.ts             # SQS operations
 ├── lambdas/               # Lambda function handlers
-│   ├── api-handler.ts     # API Gateway handler
-│   ├── sqs-processor.ts   # SQS message processor
-│   ├── validate-policy.ts # Policy validation
-│   └── publish-policy.ts  # Policy publishing
+│   ├── api-handler/api-handler.ts     # API Gateway handler
+│   ├── sqs-processor/sqs-processor.ts   # SQS message processor
+│   ├── validate-policy/validate-policy.ts # Policy validation
+│   └── publish-policy/publish-policy.ts  # Policy publishing
 └── infrastructure/        # CDK infrastructure code
     ├── app.ts            # CDK app entry point
     └── policy-manager-stack.ts # Main stack definition
 
 local-dev/                 # Local development setup
 ├── docker-compose.local.yml # Local services
+├── Dockerfile.api-handler    # API Handler Lambda container
+├── Dockerfile.user-policies-api # User Policies API Lambda container
+├── Dockerfile.validate-policy  # Validate Policy Lambda container
+├── Dockerfile.publish-policy   # Publish Policy Lambda container
+├── Dockerfile.sqs-processor    # SQS Processor Lambda container
 ├── setup-local.sh        # Environment setup script
 ├── get-auth-token.sh     # Token generation utility
-└── *.js                  # Local Lambda containers
+└── *.js                  # Local service containers
 
 tests/                     # Test files
 ├── unit/                 # Unit tests
@@ -277,7 +282,7 @@ const apiHandler = new lambda.Function(this, 'ApiHandler', {
 In local development, layers are simulated by **including all code directly in each Lambda container**:
 
 ```dockerfile
-# local-dev/Dockerfile.lambda
+# Example: local-dev/Dockerfile.api-handler
 FROM public.ecr.aws/lambda/nodejs:18
 
 # Install dependencies
@@ -285,15 +290,15 @@ COPY package*.json ./
 RUN npm ci
 
 # Copy ALL source code (simulates layer + function code)
-COPY src/ ./src/           # ← Includes shared code (layer simulation)
+COPY src/shared/ ./src/shared/           # ← Shared code (layer simulation)
+COPY src/lambdas/api-handler/ ./src/lambdas/api-handler/  # ← Function-specific code
 COPY tsconfig.json ./
 
 # Build TypeScript (includes shared + lambda code)
 RUN npm run build
 
 # Set handler for specific Lambda function
-ARG LAMBDA_HANDLER
-ENV _HANDLER=dist/lambdas/${LAMBDA_HANDLER}
+ENV _HANDLER=dist/lambdas/api-handler/api-handler.handler
 ```
 
 #### **Layer Content Structure:**

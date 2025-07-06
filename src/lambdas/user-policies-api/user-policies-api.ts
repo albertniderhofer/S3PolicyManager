@@ -1,14 +1,14 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { TokenValidator } from '../shared/auth';
-import { UserPolicyRepository } from '../shared/repository';
-import { RequestContextManager, ContextUtils } from '../shared/context';
+import { TokenValidator } from '../../shared/auth';
+import { UserPolicyRepository } from '../../shared/repository';
+import { RequestContextManager, ContextUtils } from '../../shared/context';
 import { 
   APIResponse, 
   ErrorResponse, 
   UnauthorizedError, 
   ValidationError, 
   NotFoundError 
-} from '../shared/types';
+} from '../../shared/types';
 
 /**
  * User Policies API Lambda Handler

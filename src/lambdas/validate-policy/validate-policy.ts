@@ -1,6 +1,6 @@
-import { PolicyRepository } from '../shared/repository';
-import { RequestContextManager, ContextUtils } from '../shared/context';
-import { StepFunctionInput, StepFunctionOutput } from '../shared/types';
+import { PolicyRepository } from '../../shared/repository';
+import { RequestContextManager, ContextUtils } from '../../shared/context';
+import { StepFunctionInput, StepFunctionOutput } from '../../shared/types';
 
 /**
  * Step Functions Task: Validate Policy

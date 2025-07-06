@@ -1,8 +1,8 @@
 import { SQSEvent, SQSRecord } from 'aws-lambda';
-import { SchemaValidator } from '../shared/schema';
-import { RequestContextManager, ContextUtils } from '../shared/context';
-import { PolicyRepository, UserPolicyRepository } from '../shared/repository';
-import { SQSEvent as PolicySQSEvent } from '../shared/types';
+import { SchemaValidator } from '../../shared/schema';
+import { RequestContextManager, ContextUtils } from '../../shared/context';
+import { PolicyRepository, UserPolicyRepository } from '../../shared/repository';
+import { SQSEvent as PolicySQSEvent } from '../../shared/types';
 
 /**
  * SQS Message Processor Lambda
