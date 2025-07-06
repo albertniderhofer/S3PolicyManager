@@ -197,7 +197,9 @@ export class PolicyManagerStack extends cdk.Stack {
       functionName: `policy-manager-api-${environment}`,
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'api-handler.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas')),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas'), {
+        exclude: ['user-policies-api.ts', 'validate-policy.ts', 'publish-policy.ts', 'sqs-processor.ts']
+      }),
       layers: [sharedLayer],
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
@@ -228,7 +230,9 @@ export class PolicyManagerStack extends cdk.Stack {
       functionName: `policy-manager-user-policies-api-${environment}`,
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'user-policies-api.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas')),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas'), {
+        exclude: ['api-handler.ts', 'validate-policy.ts', 'publish-policy.ts', 'sqs-processor.ts']
+      }),
       layers: [sharedLayer],
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
@@ -259,7 +263,9 @@ export class PolicyManagerStack extends cdk.Stack {
       functionName: `policy-manager-validate-${environment}`,
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'validate-policy.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas')),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas'), {
+        exclude: ['api-handler.ts', 'user-policies-api.ts', 'publish-policy.ts', 'sqs-processor.ts']
+      }),
       layers: [sharedLayer],
       timeout: cdk.Duration.minutes(2),
       memorySize: 256,
@@ -278,7 +284,9 @@ export class PolicyManagerStack extends cdk.Stack {
       functionName: `policy-manager-publish-${environment}`,
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'publish-policy.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas')),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas'), {
+        exclude: ['api-handler.ts', 'user-policies-api.ts', 'validate-policy.ts', 'sqs-processor.ts']
+      }),
       layers: [sharedLayer],
       timeout: cdk.Duration.minutes(3),
       memorySize: 256,
@@ -387,7 +395,9 @@ export class PolicyManagerStack extends cdk.Stack {
       functionName: `policy-manager-sqs-processor-${environment}`,
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'sqs-processor.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas')),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas'), {
+        exclude: ['api-handler.ts', 'user-policies-api.ts', 'validate-policy.ts', 'publish-policy.ts']
+      }),
       layers: [sharedLayer],
       timeout: cdk.Duration.minutes(5),
       memorySize: 256,
