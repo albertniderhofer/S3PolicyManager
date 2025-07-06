@@ -4,7 +4,7 @@
   "description": "AWS CDK S3 Policy Manager with Step Functions, Lambda, and DynamoDB",
   "main": "index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "./node_modules/typescript/bin/tsc",
     "watch": "tsc -w",
     "test": "jest",
     "test:unit": "jest --testPathPattern=unit",
