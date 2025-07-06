@@ -2,7 +2,7 @@ const { SQSClient, ReceiveMessageCommand, DeleteMessageCommand } = require('@aws
 const express = require('express');
 
 // Import the compiled SQS processor handler
-const { handler: sqsHandler } = require('./dist/lambdas/sqs-processor/sqs-processor');
+const { handler: sqsHandler } = require('./dist/lambdas/sqs-processor/sqs-processor.js');
 
 // Configuration
 const QUEUE_URL = process.env.SQS_QUEUE_URL || 'http://sqs-local:9324/000000000000/policy-events-local';

@@ -57,7 +57,7 @@ services:
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - DYNAMODB_TABLE_NAME=policy-manager-local
-      - SQS_QUEUE_URL=http://sqs-local:9324/queue/policy-events-local
+      - SQS_QUEUE_URL=http://sqs-local:9324/000000000000/policy-events-local
       - COGNITO_USER_POOL_ID=local_user_pool
       - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
       - SQS_ENDPOINT=http://sqs-local:9324
@@ -75,7 +75,7 @@ services:
       dockerfile: local-dev/Dockerfile.sqs-processor
     container_name: sqs-processor
     ports:
-      - "3002:8080"
+      - "3002:3002"
     environment:
       - NODE_ENV=development
       - AWS_REGION=us-east-1

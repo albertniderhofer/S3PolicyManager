@@ -161,6 +161,24 @@
         "RefreshToken": "days"
       },
       "UserPoolId": "local_5w9cIVQ0"
+    },
+    "2yzfsx2ulqlkwmeuwf0wfn8kx": {
+      "ClientId": "2yzfsx2ulqlkwmeuwf0wfn8kx",
+      "ClientName": "policy-manager-client",
+      "ClientSecret": "7nujuomokmihq4w4681slclgw",
+      "CreationDate": "2025-07-06T16:43:51.688Z",
+      "ExplicitAuthFlows": [
+        "ADMIN_NO_SRP_AUTH",
+        "ALLOW_USER_PASSWORD_AUTH",
+        "ALLOW_REFRESH_TOKEN_AUTH"
+      ],
+      "LastModifiedDate": "2025-07-06T16:43:51.688Z",
+      "TokenValidityUnits": {
+        "AccessToken": "hours",
+        "IdToken": "minutes",
+        "RefreshToken": "days"
+      },
+      "UserPoolId": "local_3J30eWWX"
     }
   }
 }
