@@ -1,25 +1,33 @@
 # Authentication Setup for S3 Policy Manager
 
-## Current Authentication Status
+## Authentication Modes
 
-The S3 Policy Manager currently supports **two authentication modes**:
+The S3 Policy Manager supports **three authentication modes**:
 
-### 1. Development Mode (Currently Active)
-- **Status**: ✅ Working
-- **Mode**: Mock authentication for local development
+### 1. Mock Development Mode
+- **Environment**: Local development only
+- **Mode**: Mock authentication for rapid development
 - **How it works**: When no Authorization header is provided, the system automatically creates a mock token with:
   - Tenant ID: `123e4567-e89b-12d3-a456-426614174000`
   - Username: `mockuser`
   - User ID: `mock-user-id`
   - Groups: `["Admin"]`
 
-### 2. Production Mode (Cognito JWT)
-- **Status**: 🔧 Configured but needs testing
-- **Mode**: Full JWT validation with Cognito Local
+### 2. Local Cognito Development Mode
+- **Environment**: Local development with Cognito Local
+- **Mode**: JWT validation with local Cognito instance
 - **Setup**: Cognito Local is configured with:
-  - User Pool ID: `local_2z3zF2el`
-  - Client ID: `ey9gpoc5g4xpm4pl5z1rnn7bh`
-  - Test users created (admin@example.com, user@example.com)
+  - User Pool ID: `[configured in local setup]`
+  - Client ID: `[configured in local setup]`
+  - Test users created (see local-dev/get-auth-token.sh)
+
+### 3. AWS Cognito Production Mode
+- **Environment**: Production AWS environment
+- **Mode**: Full JWT validation with AWS Cognito User Pool
+- **Setup**: AWS Cognito User Pool deployed via CDK:
+  - User Pool ID: Available from CDK deployment outputs
+  - Region: `us-east-1`
+  - Custom attribute: `tenant_id`
 
 ## How Authentication Currently Works
 
@@ -72,12 +80,12 @@ The system has been configured with:
 - User Group: Limited access
 
 **Test Users**:
-- **Admin**: `admin@example.com` / `AdminPass123!`
-- **User**: `user@example.com` / `UserPass123!`
-- **Tenant ID**: `123e4567-e89b-12d3-a456-426614174000`
+- **Admin**: `admin@example.com` / `[password in script]`
+- **User**: `user@example.com` / `[password in script]`
+- **Tenant ID**: `[configured in local setup]`
 
-**Client**: `ey9gpoc5g4xpm4pl5z1rnn7bh`
-- Supports ADMIN_NO_SRP_AUTH flow
+**Client**: `[configured in local setup]`
+- Supports USER_PASSWORD_AUTH flow (local compatible)
 - Configured for local development
 
 ## Token Generation (Ready for Testing)
@@ -123,12 +131,241 @@ AWS_REGION=us-east-1                   # For Cognito region
 COGNITO_USER_POOL_ID=local_2z3zF2el   # Cognito User Pool ID
 ```
 
-## Next Steps for Full Cognito Integration
+## Production Authentication with AWS Cognito
 
-1. **Test Token Generation**: Debug the Cognito Local token generation
-2. **Verify JWT Validation**: Test with actual JWT tokens
-3. **Production Configuration**: Set up real Cognito for production
-4. **Integration Tests**: Create automated tests for both modes
+### Prerequisites
+- AWS CLI configured with appropriate permissions
+- User Pool ID: Available from CDK deployment outputs
+- User Pool Client ID: Available from CDK deployment outputs or AWS Console
+- AWS Region: `us-east-1`
+
+### Step 1: Get User Pool and Client Details
+
+Get the User Pool and Client details from your CDK deployment:
+
+```bash
+# Get User Pool ID from CDK outputs
+aws cloudformation describe-stacks \
+  --stack-name PolicyManagerStack-dev \
+  --query 'Stacks[0].Outputs[?OutputKey==`UserPoolId`].OutputValue' \
+  --output text \
+  --region us-east-1
+
+# List User Pool Clients to get Client ID
+aws cognito-idp list-user-pool-clients \
+  --user-pool-id <YOUR_USER_POOL_ID> \
+  --region us-east-1
+```
+
+The User Pool Client is configured with:
+- **Auth Flows**: ALLOW_ADMIN_USER_PASSWORD_AUTH, ALLOW_USER_PASSWORD_AUTH, ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH
+- **Token Validity**: 
+  - Access Token: 1 hour
+  - ID Token: 1 hour  
+  - Refresh Token: 30 days
+
+**Note**: If you need to create additional clients, you can use:
+
+```bash
+# Create additional app client (optional)
+aws cognito-idp create-user-pool-client \
+  --user-pool-id <YOUR_USER_POOL_ID> \
+  --client-name "PolicyManagerClient-Additional" \
+  --explicit-auth-flows ADMIN_NO_SRP_AUTH ALLOW_USER_PASSWORD_AUTH ALLOW_REFRESH_TOKEN_AUTH \
+  --region us-east-1
+```
+
+### Step 2: Create Users and Set Passwords
+
+```bash
+# Create a new user
+aws cognito-idp admin-create-user \
+  --user-pool-id <YOUR_USER_POOL_ID> \
+  --username "<YOUR_USERNAME>" \
+  --user-attributes Name=email,Value=<YOUR_EMAIL> Name=custom:tenant_id,Value=<YOUR_TENANT_ID> \
+  --temporary-password "<TEMP_PASSWORD>" \
+  --message-action SUPPRESS \
+  --region us-east-1
+
+# Set permanent password
+aws cognito-idp admin-set-user-password \
+  --user-pool-id <YOUR_USER_POOL_ID> \
+  --username "<YOUR_USERNAME>" \
+  --password "<YOUR_SECURE_PASSWORD>" \
+  --permanent \
+  --region us-east-1
+
+# Add user to Admin group
+aws cognito-idp admin-add-user-to-group \
+  --user-pool-id <YOUR_USER_POOL_ID> \
+  --username "<YOUR_USERNAME>" \
+  --group-name Admin \
+  --region us-east-1
+```
+
+### Step 3: Obtain Bearer Token
+
+#### Method 1: Using AWS CLI (Recommended for Testing)
+
+```bash
+# Authenticate and get tokens
+aws cognito-idp admin-initiate-auth \
+  --user-pool-id <YOUR_USER_POOL_ID> \
+  --client-id <YOUR_CLIENT_ID> \
+  --auth-flow ADMIN_NO_SRP_AUTH \
+  --auth-parameters USERNAME=<YOUR_USERNAME>,PASSWORD=<YOUR_PASSWORD> \
+  --region us-east-1
+```
+
+This returns a JSON response with:
+- `AccessToken` - Use this as your Bearer token
+- `IdToken` - Contains user information
+- `RefreshToken` - Use to refresh expired tokens
+
+#### Method 2: Using cURL (Direct API Call)
+
+```bash
+# Get bearer token via direct API call
+curl -X POST https://cognito-idp.us-east-1.amazonaws.com/ \
+  -H "Content-Type: application/x-amz-json-1.1" \
+  -H "X-Amz-Target: AWSCognitoIdentityProviderService.AdminInitiateAuth" \
+  -d '{
+    "UserPoolId": "<YOUR_USER_POOL_ID>",
+    "ClientId": "<YOUR_CLIENT_ID>",
+    "AuthFlow": "ADMIN_NO_SRP_AUTH",
+    "AuthParameters": {
+      "USERNAME": "<YOUR_USERNAME>",
+      "PASSWORD": "<YOUR_PASSWORD>"
+    }
+  }'
+```
+
+#### Method 3: Using Node.js/JavaScript
+
+```javascript
+const { CognitoIdentityProviderClient, AdminInitiateAuthCommand } = require("@aws-sdk/client-cognito-identity-provider");
+
+const client = new CognitoIdentityProviderClient({ region: "us-east-1" });
+
+async function getAuthToken(username, password) {
+  const command = new AdminInitiateAuthCommand({
+    UserPoolId: "<YOUR_USER_POOL_ID>",
+    ClientId: "<YOUR_CLIENT_ID>",
+    AuthFlow: "ADMIN_NO_SRP_AUTH",
+    AuthParameters: {
+      USERNAME: username,
+      PASSWORD: password,
+    },
+  });
+
+  try {
+    const response = await client.send(command);
+    return response.AuthenticationResult.AccessToken;
+  } catch (error) {
+    console.error("Authentication failed:", error);
+    throw error;
+  }
+}
+
+// Usage
+getAuthToken("<YOUR_USERNAME>", "<YOUR_PASSWORD>")
+  .then(token => console.log("Bearer Token:", token));
+```
+
+### Step 4: Use Bearer Token with API
+
+Once you have the bearer token, use it to authenticate API requests:
+
+```bash
+# Example API call with bearer token
+curl -X GET <YOUR_API_GATEWAY_URL>/policies \
+  -H "Authorization: Bearer <YOUR_ACCESS_TOKEN>" \
+  -H "Content-Type: application/json"
+
+# Create a policy with authentication
+curl -X POST <YOUR_API_GATEWAY_URL>/policies \
+  -H "Authorization: Bearer <YOUR_ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production Policy",
+    "description": "Policy created with proper authentication",
+    "enabled": true,
+    "status": "draft",
+    "rules": []
+  }'
+```
+
+### Token Refresh
+
+Access tokens expire (typically after 1 hour). Use the refresh token to get new tokens:
+
+```bash
+# Refresh expired token
+aws cognito-idp admin-initiate-auth \
+  --user-pool-id <YOUR_USER_POOL_ID> \
+  --client-id <YOUR_CLIENT_ID> \
+  --auth-flow REFRESH_TOKEN_AUTH \
+  --auth-parameters REFRESH_TOKEN=<YOUR_REFRESH_TOKEN> \
+  --region us-east-1
+```
+
+### Production Environment Variables
+
+For production deployment, ensure these environment variables are set:
+
+```bash
+NODE_ENV=production                     # Disables mock authentication
+AWS_REGION=us-east-1                   # AWS region
+COGNITO_USER_POOL_ID=<YOUR_USER_POOL_ID>  # Production User Pool ID
+```
+
+### Security Best Practices
+
+1. **Never hardcode credentials** - Use environment variables or AWS Secrets Manager
+2. **Use HTTPS only** - All API calls must use HTTPS in production
+3. **Implement token refresh** - Handle token expiration gracefully
+4. **Validate tenant isolation** - Ensure users can only access their tenant's data
+5. **Monitor authentication** - Set up CloudWatch alarms for failed authentications
+6. **Use least privilege** - Grant minimal required permissions to users
+
+### Troubleshooting Production Authentication
+
+#### Common Issues:
+
+1. **"User does not exist"**
+   ```bash
+   # Check if user exists
+   aws cognito-idp admin-get-user \
+     --user-pool-id <YOUR_USER_POOL_ID> \
+     --username <YOUR_USERNAME> \
+     --region us-east-1
+   ```
+
+2. **"User is not confirmed"**
+   ```bash
+   # Confirm user manually
+   aws cognito-idp admin-confirm-sign-up \
+     --user-pool-id <YOUR_USER_POOL_ID> \
+     --username <YOUR_USERNAME> \
+     --region us-east-1
+   ```
+
+3. **"Invalid authentication flow"**
+   - Ensure your app client has `ADMIN_NO_SRP_AUTH` enabled
+   - Check that the client ID is correct
+
+4. **"Access denied" on API calls**
+   - Verify the bearer token is valid and not expired
+   - Check that the user has the correct group membership
+   - Ensure the `tenant_id` custom attribute is set
+
+### Next Steps for Full Cognito Integration
+
+1. **Create App Client**: Set up a proper app client with required auth flows
+2. **User Management**: Create users and assign them to appropriate groups
+3. **Test Token Generation**: Verify token generation works with your client
+4. **Integration Tests**: Create automated tests for production authentication
+5. **Monitoring**: Set up CloudWatch monitoring for authentication events
 
 ## Troubleshooting
 

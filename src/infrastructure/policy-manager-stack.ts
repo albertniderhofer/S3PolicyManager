@@ -11,7 +11,6 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Construct } from 'constructs';
 import * as path from 'path';
-import * as fs from 'fs';
 
 export interface PolicyManagerStackProps extends cdk.StackProps {
   environment: 'dev' | 'staging' | 'prod';
@@ -143,6 +142,30 @@ export class PolicyManagerStack extends cdk.Stack {
         groupName: 'User',
         description: 'Standard user group with limited access',
       });
+
+      // Create User Pool Client for production authentication
+      const userPoolClient = new cognito.UserPoolClient(this, 'PolicyManagerUserPoolClient', {
+        userPool: this.userPool,
+        userPoolClientName: `policy-manager-client-${environment}`,
+        authFlows: {
+          adminUserPassword: true,
+          userPassword: true,
+          custom: true,
+          userSrp: true,
+        },
+        generateSecret: false, // For web/mobile apps, set to false
+        preventUserExistenceErrors: true,
+        refreshTokenValidity: cdk.Duration.days(30),
+        accessTokenValidity: cdk.Duration.hours(1),
+        idTokenValidity: cdk.Duration.hours(1),
+        supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
+      });
+
+      // Output the client ID for easy access
+      new cdk.CfnOutput(this, 'UserPoolClientId', {
+        value: userPoolClient.userPoolClientId,
+        description: 'Cognito User Pool Client ID for authentication',
+      });
     }
 
     // SQS Queue for policy events
@@ -269,15 +292,85 @@ export class PolicyManagerStack extends cdk.Stack {
     // Grant permissions to Publish Policy
     this.table.grantReadWriteData(publishPolicy);
 
-    // Step Functions State Machine
-    const workflowDefinition = this.loadStepFunctionDefinition();
-    const definitionWithArns = workflowDefinition
-      .replace('${ValidatePolicyLambdaArn}', validatePolicy.functionArn)
-      .replace('${PublishPolicyLambdaArn}', publishPolicy.functionArn);
+    // Step Functions State Machine - Define using CDK constructs to avoid circular dependencies
+    const validatePolicyTask = new sfnTasks.LambdaInvoke(this, 'ValidatePolicyTask', {
+      lambdaFunction: validatePolicy,
+      outputPath: '$.Payload',
+    });
+
+    const publishPolicyTask = new sfnTasks.LambdaInvoke(this, 'PublishPolicyTask', {
+      lambdaFunction: publishPolicy,
+      outputPath: '$.Payload',
+    });
+
+    // Define the workflow using CDK constructs
+    const validationFailed = new stepfunctions.Pass(this, 'ValidationFailed', {
+      parameters: {
+        'status': 'VALIDATION_FAILED',
+        'message': 'Policy validation failed',
+        'validationIssues.$': '$.validationResult.issues',
+        'error.$': '$.error'
+      },
+      resultPath: '$.workflowResult',
+    });
+
+    const publishFailed = new stepfunctions.Pass(this, 'PublishFailed', {
+      parameters: {
+        'status': 'PUBLISH_FAILED',
+        'message': 'Policy publish to external systems failed',
+        'publishError.$': '$.taskResults.publishPolicy.error',
+        'error.$': '$.error'
+      },
+      resultPath: '$.workflowResult',
+    });
+
+    const workflowSucceeded = new stepfunctions.Pass(this, 'WorkflowSucceeded', {
+      parameters: {
+        'status': 'SUCCESS',
+        'message': 'Policy workflow completed successfully'
+      },
+      resultPath: '$.workflowResult',
+    });
+
+    const notifyFailure = new stepfunctions.Pass(this, 'NotifyFailure', {
+      parameters: {
+        'notificationSent': true,
+        'timestamp.$': '$$.State.EnteredTime'
+      },
+      resultPath: '$.notification',
+    });
+
+    // Chain the workflow
+    const checkValidationResult = new stepfunctions.Choice(this, 'CheckValidationResult')
+      .when(stepfunctions.Condition.booleanEquals('$.validationResult.isValid', true), publishPolicyTask)
+      .otherwise(validationFailed);
+
+    const checkPublishResult = new stepfunctions.Choice(this, 'CheckPublishResult')
+      .when(stepfunctions.Condition.stringEquals('$.taskResults.publishPolicy.status', 'success'), workflowSucceeded)
+      .otherwise(publishFailed);
+
+    // Add error handling
+    validatePolicyTask.addCatch(validationFailed, {
+      errors: ['States.ALL'],
+      resultPath: '$.error'
+    });
+
+    publishPolicyTask.addCatch(publishFailed, {
+      errors: ['States.ALL'],
+      resultPath: '$.error'
+    });
+
+    // Chain the states
+    const definition = validatePolicyTask
+      .next(checkValidationResult);
+    
+    publishPolicyTask.next(checkPublishResult);
+    validationFailed.next(notifyFailure);
+    publishFailed.next(notifyFailure);
 
     this.stateMachine = new stepfunctions.StateMachine(this, 'PolicyWorkflow', {
       stateMachineName: `policy-workflow-${environment}`,
-      definitionBody: stepfunctions.DefinitionBody.fromString(definitionWithArns),
+      definitionBody: stepfunctions.DefinitionBody.fromChainable(definition),
       timeout: cdk.Duration.minutes(15),
       logs: {
         destination: new logs.LogGroup(this, 'StateMachineLogGroup', {
@@ -288,10 +381,6 @@ export class PolicyManagerStack extends cdk.Stack {
         level: stepfunctions.LogLevel.ALL,
       },
     });
-
-    // Grant Step Functions permission to invoke Lambda functions
-    validatePolicy.grantInvoke(this.stateMachine);
-    publishPolicy.grantInvoke(this.stateMachine);
 
     // SQS Processor Lambda
     const sqsProcessor = new lambda.Function(this, 'SqsProcessor', {
@@ -454,11 +543,4 @@ export class PolicyManagerStack extends cdk.Stack {
     });
   }
 
-  /**
-   * Load Step Functions definition from JSON file
-   */
-  private loadStepFunctionDefinition(): string {
-    const definitionPath = path.join(__dirname, '../stepfunctions/policy-workflow.json');
-    return fs.readFileSync(definitionPath, 'utf8');
-  }
 }
