@@ -3,8 +3,6 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import * as stepfunctions from 'aws-cdk-lib/aws-stepfunctions';
-import * as sfnTasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -22,7 +20,6 @@ export class PolicyManagerStack extends cdk.Stack {
   public readonly userPool: cognito.IUserPool;
   public readonly table: dynamodb.Table;
   public readonly queue: sqs.Queue;
-  public readonly stateMachine: stepfunctions.StateMachine;
 
   constructor(scope: Construct, id: string, props: PolicyManagerStackProps) {
     super(scope, id, props);
@@ -254,135 +251,7 @@ export class PolicyManagerStack extends cdk.Stack {
       resources: [this.userPool.userPoolArn],
     }));
 
-    // Validate Policy Lambda
-    const validatePolicy = new lambda.Function(this, 'ValidatePolicy', {
-      functionName: `policy-manager-validate-${environment}`,
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'validate-policy.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas/validate-policy')),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.minutes(2),
-      memorySize: 256,
-      environment: {
-        NODE_ENV: environment,
-        DYNAMODB_TABLE_NAME: this.table.tableName,
-      },
-      logRetention: logs.RetentionDays.ONE_WEEK,
-    });
-
-    // Grant permissions to Validate Policy
-    this.table.grantReadWriteData(validatePolicy);
-
-    // Publish Policy Lambda
-    const publishPolicy = new lambda.Function(this, 'PublishPolicy', {
-      functionName: `policy-manager-publish-${environment}`,
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'publish-policy.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas/publish-policy')),
-      layers: [sharedLayer],
-      timeout: cdk.Duration.minutes(3),
-      memorySize: 256,
-      environment: {
-        NODE_ENV: environment,
-        DYNAMODB_TABLE_NAME: this.table.tableName,
-      },
-      logRetention: logs.RetentionDays.ONE_WEEK,
-    });
-
-    // Grant permissions to Publish Policy
-    this.table.grantReadWriteData(publishPolicy);
-
-    // Step Functions State Machine - Define using CDK constructs to avoid circular dependencies
-    const validatePolicyTask = new sfnTasks.LambdaInvoke(this, 'ValidatePolicyTask', {
-      lambdaFunction: validatePolicy,
-      outputPath: '$.Payload',
-    });
-
-    const publishPolicyTask = new sfnTasks.LambdaInvoke(this, 'PublishPolicyTask', {
-      lambdaFunction: publishPolicy,
-      outputPath: '$.Payload',
-    });
-
-    // Define the workflow using CDK constructs
-    const validationFailed = new stepfunctions.Pass(this, 'ValidationFailed', {
-      parameters: {
-        'status': 'VALIDATION_FAILED',
-        'message': 'Policy validation failed',
-        'validationIssues.$': '$.validationResult.issues',
-        'error.$': '$.error'
-      },
-      resultPath: '$.workflowResult',
-    });
-
-    const publishFailed = new stepfunctions.Pass(this, 'PublishFailed', {
-      parameters: {
-        'status': 'PUBLISH_FAILED',
-        'message': 'Policy publish to external systems failed',
-        'publishError.$': '$.taskResults.publishPolicy.error',
-        'error.$': '$.error'
-      },
-      resultPath: '$.workflowResult',
-    });
-
-    const workflowSucceeded = new stepfunctions.Pass(this, 'WorkflowSucceeded', {
-      parameters: {
-        'status': 'SUCCESS',
-        'message': 'Policy workflow completed successfully'
-      },
-      resultPath: '$.workflowResult',
-    });
-
-    const notifyFailure = new stepfunctions.Pass(this, 'NotifyFailure', {
-      parameters: {
-        'notificationSent': true,
-        'timestamp.$': '$$.State.EnteredTime'
-      },
-      resultPath: '$.notification',
-    });
-
-    // Chain the workflow
-    const checkValidationResult = new stepfunctions.Choice(this, 'CheckValidationResult')
-      .when(stepfunctions.Condition.booleanEquals('$.validationResult.isValid', true), publishPolicyTask)
-      .otherwise(validationFailed);
-
-    const checkPublishResult = new stepfunctions.Choice(this, 'CheckPublishResult')
-      .when(stepfunctions.Condition.stringEquals('$.taskResults.publishPolicy.status', 'success'), workflowSucceeded)
-      .otherwise(publishFailed);
-
-    // Add error handling
-    validatePolicyTask.addCatch(validationFailed, {
-      errors: ['States.ALL'],
-      resultPath: '$.error'
-    });
-
-    publishPolicyTask.addCatch(publishFailed, {
-      errors: ['States.ALL'],
-      resultPath: '$.error'
-    });
-
-    // Chain the states
-    const definition = validatePolicyTask
-      .next(checkValidationResult);
-    
-    publishPolicyTask.next(checkPublishResult);
-    validationFailed.next(notifyFailure);
-    publishFailed.next(notifyFailure);
-
-    this.stateMachine = new stepfunctions.StateMachine(this, 'PolicyWorkflow', {
-      stateMachineName: `policy-workflow-${environment}`,
-      definitionBody: stepfunctions.DefinitionBody.fromChainable(definition),
-      timeout: cdk.Duration.minutes(15),
-      logs: {
-        destination: new logs.LogGroup(this, 'StateMachineLogGroup', {
-          logGroupName: `/aws/stepfunctions/policy-workflow-${environment}`,
-          retention: logs.RetentionDays.ONE_WEEK,
-          removalPolicy: cdk.RemovalPolicy.DESTROY,
-        }),
-        level: stepfunctions.LogLevel.ALL,
-      },
-    });
-
-    // SQS Processor Lambda
+    // SQS Processor Lambda (with inline validation and publishing)
     const sqsProcessor = new lambda.Function(this, 'SqsProcessor', {
       functionName: `policy-manager-sqs-processor-${environment}`,
       runtime: lambda.Runtime.NODEJS_18_X,
@@ -390,16 +259,18 @@ export class PolicyManagerStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambdas/sqs-processor')),
       layers: [sharedLayer],
       timeout: cdk.Duration.minutes(5),
-      memorySize: 256,
+      memorySize: 512,
       environment: {
         NODE_ENV: environment,
-        STATE_MACHINE_ARN: this.stateMachine.stateMachineArn,
+        DYNAMODB_TABLE_NAME: this.table.tableName,
+        USER_POLICIES_TABLE_NAME: `UserPolicies-${environment}`,
       },
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
 
-    // Grant SQS processor permission to start executions
-    this.stateMachine.grantStartExecution(sqsProcessor);
+    // Grant SQS processor permissions to access DynamoDB tables
+    this.table.grantReadWriteData(sqsProcessor);
+    userPoliciesTable.grantReadWriteData(sqsProcessor);
 
     // Add SQS event source to processor
     sqsProcessor.addEventSource(new SqsEventSource(this.queue, {
@@ -520,10 +391,6 @@ export class PolicyManagerStack extends cdk.Stack {
       description: 'SQS Queue URL',
     });
 
-    new cdk.CfnOutput(this, 'StateMachineArn', {
-      value: this.stateMachine.stateMachineArn,
-      description: 'Step Functions State Machine ARN',
-    });
   }
 
 }
