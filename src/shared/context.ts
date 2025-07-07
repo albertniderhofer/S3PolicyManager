@@ -1,6 +1,7 @@
 import { APIGatewayProxyEvent } from 'aws-lambda';
 import { RequestContext, CognitoTokenPayload } from './types';
 import { CidrCache } from './cidr-cache';
+import { CidrUtils } from './cidr';
 
 /**
  * Global Request Context Manager
@@ -238,61 +239,15 @@ export class RequestContextManager {
     }
 
     // Check IP against each CIDR block
-    for (const cidr of cidrList) {
-      if (this.isIpInCidr(ip, cidr)) {
-        console.log(`IP ${ip} matches CIDR blacklist entry: ${cidr}`, {
+      if (CidrUtils.isIpInAnyCidrBlock(ip, cidrList)) {
+        console.log(`IP ${ip} matches CIDR blacklist: ${cidrList}`, {
           ip,
-          cidr,
           tenantId: this.context.tenantId,
           requestId: this.context.requestId
         });
         return true;
       }
-    }
-
     return false;
-  }
-
-  /**
-   * Check if an IP address is within a CIDR block
-   */
-  private static isIpInCidr(ip: string, cidr: string): boolean {
-    try {
-      const [network, prefixLength] = cidr.split('/');
-      const prefix = parseInt(prefixLength, 10);
-      
-      if (isNaN(prefix) || prefix < 0 || prefix > 32) {
-        console.warn(`Invalid CIDR prefix length: ${cidr}`);
-        return false;
-      }
-
-      const ipNum = this.ipToNumber(ip);
-      const networkNum = this.ipToNumber(network);
-      const mask = (0xFFFFFFFF << (32 - prefix)) >>> 0;
-      
-      return (ipNum & mask) === (networkNum & mask);
-    } catch (error) {
-      console.warn(`Error checking IP ${ip} against CIDR ${cidr}:`, error);
-      return false;
-    }
-  }
-
-  /**
-   * Convert IP address string to number
-   */
-  private static ipToNumber(ip: string): number {
-    const parts = ip.split('.');
-    if (parts.length !== 4) {
-      throw new Error(`Invalid IP address format: ${ip}`);
-    }
-    
-    return parts.reduce((acc, part) => {
-      const num = parseInt(part, 10);
-      if (isNaN(num) || num < 0 || num > 255) {
-        throw new Error(`Invalid IP address octet: ${part}`);
-      }
-      return (acc << 8) + num;
-    }, 0) >>> 0; // Unsigned 32-bit integer
   }
 
   /**

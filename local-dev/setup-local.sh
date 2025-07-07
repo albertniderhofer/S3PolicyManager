@@ -387,7 +387,7 @@ aws dynamodb put-item \
         "PK": {"S": "TENANT#123e4567-e89b-12d3-a456-426614174000"},
         "SK": {"S": "CIDR#192.168.1.0/23"},
         "TenantID": {"S": "123e4567-e89b-12d3-a456-426614174000"},
-        "CidrContent": {"S": "{\"_id\":\"'$CIDR_ID_1'\",\"cidr\":\"192.168.1.0/23\",\"description\":\"Internal network range 1\",\"created\":\"'$TIMESTAMP'\",\"updated\":\"'$TIMESTAMP'\",\"createdBy\":\"admin@example.com\",\"updatedBy\":\"admin@example.com\"}"},
+        "CidrContent": {"S": "192.168.1.0/23"},
         "Created": {"S": "'$TIMESTAMP'"},
         "Updated": {"S": "'$TIMESTAMP'"},
         "CreatedBy": {"S": "admin@example.com"},
@@ -404,7 +404,7 @@ aws dynamodb put-item \
         "PK": {"S": "TENANT#123e4567-e89b-12d3-a456-426614174000"},
         "SK": {"S": "CIDR#192.10.1.0/23"},
         "TenantID": {"S": "123e4567-e89b-12d3-a456-426614174000"},
-        "CidrContent": {"S": "{\"_id\":\"'$CIDR_ID_2'\",\"cidr\":\"192.10.1.0/23\",\"description\":\"Internal network range 2\",\"created\":\"'$TIMESTAMP'\",\"updated\":\"'$TIMESTAMP'\",\"createdBy\":\"admin@example.com\",\"updatedBy\":\"admin@example.com\"}"},
+        "CidrContent": {"S": "192.10.1.0/23"},
         "Created": {"S": "'$TIMESTAMP'"},
         "Updated": {"S": "'$TIMESTAMP'"},
         "CreatedBy": {"S": "admin@example.com"},
@@ -421,7 +421,7 @@ aws dynamodb put-item \
         "PK": {"S": "TENANT#123e4567-e89b-12d3-a456-426614174000"},
         "SK": {"S": "CIDR#10.0.0.0/8"},
         "TenantID": {"S": "123e4567-e89b-12d3-a456-426614174000"},
-        "CidrContent": {"S": "{\"_id\":\"'$CIDR_ID_3'\",\"cidr\":\"10.0.0.0/8\",\"description\":\"Private network range (Class A)\",\"created\":\"'$TIMESTAMP'\",\"updated\":\"'$TIMESTAMP'\",\"createdBy\":\"admin@example.com\",\"updatedBy\":\"admin@example.com\"}"},
+        "CidrContent": {"S": "10.0.0.0/8"},
         "Created": {"S": "'$TIMESTAMP'"},
         "Updated": {"S": "'$TIMESTAMP'"},
         "CreatedBy": {"S": "admin@example.com"},
@@ -433,9 +433,9 @@ aws dynamodb put-item \
 
 echo "✅ Sample CIDR blacklist data inserted"
 echo "📋 CIDR Records Created:"
-echo "   • 192.168.1.0/23 (ID: $CIDR_ID_1) - Internal network range 1"
-echo "   • 192.10.1.0/23 (ID: $CIDR_ID_2) - Internal network range 2"
-echo "   • 10.0.0.0/8 (ID: $CIDR_ID_3) - Private network range (Class A)"
+echo "   • 192.168.1.0/23 - Internal network range 1"
+echo "   • 192.10.1.0/23 - Internal network range 2"
+echo "   • 10.0.0.0/8 - Private network range (Class A)"
 
 echo ""
 echo "🎉 Local development environment setup complete!"

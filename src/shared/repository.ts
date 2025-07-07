@@ -45,7 +45,7 @@ export class PolicyRepository {
   }
 
   /**
-   * Get all policies for the current tenant
+   * Get all CIDR blacklist entries for the current tenant
    * Automatically initializes if not already done (lazy initialization)
    */
   static async getAllCidr(): Promise<Cidr[]> {
@@ -59,7 +59,7 @@ export class PolicyRepository {
     console.log(ContextUtils.createLogEntry('INFO', 'Fetching all Cidrs', { tenantId }));
 
     const command = new QueryCommand({
-      TableName: this.tableName,
+      TableName: 'IpCidrBlackList', // Use the correct CIDR table
       IndexName: 'TenantID-Created-Index',
       KeyConditionExpression: 'TenantID = :tenantId',
       ExpressionAttributeValues: {
@@ -448,10 +448,16 @@ export class PolicyRepository {
    */
   private static mapRecordToCidr(record: CidrRecord): Cidr {
     try {
-      const cidr = JSON.parse(record.CidrContent) as Cidr;
-      return cidr;
+      // CidrContent is now a simple string containing just the CIDR
+      return {
+        cidr: record.CidrContent,
+        created: record.Created,
+        updated: record.Updated,
+        createdBy: record.CreatedBy,
+        updatedBy: record.UpdatedBy
+      };
     } catch (error) {
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to parse cidr content', { 
+      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to map cidr record', { 
         error: error instanceof Error ? error.message : 'Unknown error' 
       }));
       throw new Error('Invalid cidr data format');

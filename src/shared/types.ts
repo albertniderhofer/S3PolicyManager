@@ -33,7 +33,6 @@ export interface Policy {
 }
 
 export interface Cidr {
-  _id: string;
   cidr: string;
   created: string;
   updated: string;

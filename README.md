@@ -1,6 +1,8 @@
-# S3 Policy Manager
+# S3 Policy Manager - WIP
 
 A serverless AWS application for managing and deploying S3 bucket policies with multi-tenant support, built using AWS CDK, Lambda, DynamoDB, SQS.
+The overall concept is to create a mechanism that allows a n org to block all its sensetive AWS S3s from the internet, allowing access only through CloudFront, where a Lambda@Edge function checks the caller's IP is not in org black list ips cidr list before allowing the request to s3
+
 
 ## Overview
 

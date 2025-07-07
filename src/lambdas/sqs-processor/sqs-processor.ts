@@ -3,6 +3,7 @@ import { SchemaValidator } from '../../shared/schema';
 import { RequestContextManager, ContextUtils } from '../../shared/context';
 import { PolicyRepository, UserPolicyRepository } from '../../shared/repository';
 import { SQSEvent as PolicySQSEvent } from '../../shared/types';
+import { CidrUtils } from '../../shared/cidr';
 
 /**
  * SQS Message Processor Lambda
@@ -493,14 +494,7 @@ async function checkSourceIpBlacklist(
       if (isBlacklisted) {
         // Find which CIDR matched
         const cidrList = RequestContextManager.getCidrBlacklist();
-        let matchedCidr: string | undefined;
-        
-        for (const cidr of cidrList) {
-          if (isIpInCidrBlock(sourceIp, cidr)) {
-            matchedCidr = cidr;
-            break;
-          }
-        }
+        const matchedCidr = CidrUtils.findMatchingCidr(sourceIp, cidrList);
         
         return {
           isBlacklisted: true,
@@ -591,50 +585,8 @@ async function extractSourceIpsFromPolicy(policyEvent: PolicySQSEvent): Promise<
 }
 
 /**
- * Validate IP address format
+ * Validate IP address format using CidrUtils
  */
 function isValidIpAddress(ip: string): boolean {
-  const ipPattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-  return ipPattern.test(ip);
-}
-
-/**
- * Helper function to check if IP is in CIDR block
- * This duplicates logic from RequestContextManager but is needed here for finding matched CIDR
- */
-function isIpInCidrBlock(ip: string, cidr: string): boolean {
-  try {
-    const [network, prefixLength] = cidr.split('/');
-    const prefix = parseInt(prefixLength, 10);
-    
-    if (isNaN(prefix) || prefix < 0 || prefix > 32) {
-      return false;
-    }
-
-    const ipNum = ipToNumber(ip);
-    const networkNum = ipToNumber(network);
-    const mask = (0xFFFFFFFF << (32 - prefix)) >>> 0;
-    
-    return (ipNum & mask) === (networkNum & mask);
-  } catch (error) {
-    return false;
-  }
-}
-
-/**
- * Convert IP address string to number
- */
-function ipToNumber(ip: string): number {
-  const parts = ip.split('.');
-  if (parts.length !== 4) {
-    throw new Error(`Invalid IP address format: ${ip}`);
-  }
-  
-  return parts.reduce((acc, part) => {
-    const num = parseInt(part, 10);
-    if (isNaN(num) || num < 0 || num > 255) {
-      throw new Error(`Invalid IP address octet: ${part}`);
-    }
-    return (acc << 8) + num;
-  }, 0) >>> 0; // Unsigned 32-bit integer
+  return CidrUtils.isValidIpAddress(ip);
 }
