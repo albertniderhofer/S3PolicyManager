@@ -39,11 +39,11 @@ export const handler = async (event: SQSEvent): Promise<void> => {
  */
 async function processRecord(record: SQSRecord): Promise<void> {
   // Extract tracing information from message attributes
-  const traceId = record.messageAttributes?.['X-Trace-Id']?.stringValue || 
-                  record.messageAttributes?.['traceId']?.stringValue || 
+  const traceId = (record.messageAttributes && record.messageAttributes['X-Trace-Id'] && record.messageAttributes['X-Trace-Id'].stringValue) || 
+                  (record.messageAttributes && record.messageAttributes['traceId'] && record.messageAttributes['traceId'].stringValue) || 
                   'unknown';
-  const correlationId = record.messageAttributes?.['X-Correlation-Id']?.stringValue || 
-                        record.messageAttributes?.['correlationId']?.stringValue || 
+  const correlationId = (record.messageAttributes && record.messageAttributes['X-Correlation-Id'] && record.messageAttributes['X-Correlation-Id'].stringValue) || 
+                        (record.messageAttributes && record.messageAttributes['correlationId'] && record.messageAttributes['correlationId'].stringValue) || 
                         record.messageId;
 
   console.log('Processing SQS record:', {
@@ -62,7 +62,7 @@ async function processRecord(record: SQSRecord): Promise<void> {
     const policyEvent = SchemaValidator.validateSQSEvent(messageBody);
     
     // Initialize context from the policy event for structured logging
-    RequestContextManager.initializeFromEvent({
+    await RequestContextManager.initializeFromEvent({
       tenantId: policyEvent.tenantId,
       username: policyEvent.triggeredBy,
       requestId: correlationId,
@@ -124,6 +124,22 @@ async function processPolicyEvent(
   console.log(JSON.stringify(startLogEntry));
 
   try {
+    // Step 0: Check source IP against CIDR blacklist (if available)
+    const sourceIpCheckResult = await checkSourceIpBlacklist(policyEvent, messageId);
+    if (sourceIpCheckResult.isBlacklisted) {
+      const blacklistLogEntry = ContextUtils.createLogEntry('WARN', 'Policy event blocked due to blacklisted source IP', {
+        policyId: policyEvent.policyId,
+        eventType: policyEvent.eventType,
+        sourceIp: sourceIpCheckResult.sourceIp,
+        matchedCidr: sourceIpCheckResult.matchedCidr,
+        messageId
+      });
+      console.log(JSON.stringify(blacklistLogEntry));
+      
+      // Return early - do not process the policy event
+      return;
+    }
+
     // Step 1: Validate the policy
     const validationResult = await validatePolicy(policyEvent.policyId, policyEvent.eventType);
     
@@ -270,8 +286,8 @@ async function validatePolicy(policyId: string, operationType: 'create' | 'updat
             issues.push(`Rule ${index + 1}: Action must be 'allow' or 'block'`);
           }
           
-          if (!rule.source || !rule.source.user) {
-            issues.push(`Rule ${index + 1}: Source user is required`);
+          if (!rule.source || (!rule.source.user && !rule.source.ip)) {
+            issues.push(`Rule ${index + 1}: Either source user or IP address is required`);
           }
           
           if (!rule.destination || !rule.destination.domains) {
@@ -435,4 +451,190 @@ async function publishPolicy(policyId: string, operationType: 'create' | 'update
       error: error instanceof Error ? error.message : 'Unknown error'
     };
   }
+}
+
+/**
+ * Check source IP against CIDR blacklist
+ */
+async function checkSourceIpBlacklist(
+  policyEvent: PolicySQSEvent,
+  messageId: string
+): Promise<{
+  isBlacklisted: boolean;
+  sourceIp?: string;
+  matchedCidr?: string;
+}> {
+  const checkLogEntry = ContextUtils.createLogEntry('INFO', 'Checking source IP against CIDR blacklist', {
+    policyId: policyEvent.policyId,
+    eventType: policyEvent.eventType,
+    messageId
+  });
+  console.log(JSON.stringify(checkLogEntry));
+
+  try {
+    // Extract source IPs from policy rules
+    const sourceIps = await extractSourceIpsFromPolicy(policyEvent);
+    
+    if (sourceIps.length === 0) {
+      const noIpLogEntry = ContextUtils.createLogEntry('INFO', 'No source IPs found in policy rules, skipping blacklist check', {
+        policyId: policyEvent.policyId,
+        eventType: policyEvent.eventType,
+        messageId
+      });
+      console.log(JSON.stringify(noIpLogEntry));
+      
+      return { isBlacklisted: false };
+    }
+
+    // Check each IP against blacklist using RequestContextManager
+    for (const sourceIp of sourceIps) {
+      const isBlacklisted = RequestContextManager.isIpBlacklisted(sourceIp);
+      
+      if (isBlacklisted) {
+        // Find which CIDR matched
+        const cidrList = RequestContextManager.getCidrBlacklist();
+        let matchedCidr: string | undefined;
+        
+        for (const cidr of cidrList) {
+          if (isIpInCidrBlock(sourceIp, cidr)) {
+            matchedCidr = cidr;
+            break;
+          }
+        }
+        
+        return {
+          isBlacklisted: true,
+          sourceIp,
+          matchedCidr
+        };
+      }
+    }
+
+    const allowedLogEntry = ContextUtils.createLogEntry('INFO', 'No source IPs are blacklisted, proceeding with policy processing', {
+      policyId: policyEvent.policyId,
+      sourceIps,
+      cidrCount: RequestContextManager.getCidrBlacklist().length,
+      messageId
+    });
+    console.log(JSON.stringify(allowedLogEntry));
+
+    return {
+      isBlacklisted: false,
+      sourceIp: sourceIps[0] // Return first IP for logging purposes
+    };
+
+  } catch (error) {
+    const errorLogEntry = ContextUtils.createLogEntry('WARN', 'Error checking source IP blacklist, continuing without check', {
+      policyId: policyEvent.policyId,
+      eventType: policyEvent.eventType,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      messageId
+    });
+    console.log(JSON.stringify(errorLogEntry));
+
+    // Continue processing on error as per requirement
+    return { isBlacklisted: false };
+  }
+}
+
+/**
+ * Extract source IP addresses from policy rules
+ * Returns all unique IP addresses found in the policy's rules
+ */
+async function extractSourceIpsFromPolicy(policyEvent: PolicySQSEvent): Promise<string[]> {
+  try {
+    // Get the policy to extract IPs from its rules
+    const policy = await PolicyRepository.getPolicyById(policyEvent.policyId);
+    
+    const sourceIps: string[] = [];
+    
+    // Extract IPs from all policy rules
+    if (policy.rules && Array.isArray(policy.rules)) {
+      for (const rule of policy.rules) {
+        if (rule.source && rule.source.ip) {
+          // Validate IP format before adding
+          if (isValidIpAddress(rule.source.ip)) {
+            sourceIps.push(rule.source.ip);
+          } else {
+            console.warn(`Invalid IP address format in rule ${rule.id}: ${rule.source.ip}`, {
+              policyId: policyEvent.policyId,
+              ruleId: rule.id,
+              ruleName: rule.name,
+              invalidIp: rule.source.ip
+            });
+          }
+        }
+      }
+    }
+    
+    // Return unique IPs only
+    const uniqueIps = [...new Set(sourceIps)];
+    
+    const extractionLogEntry = ContextUtils.createLogEntry('INFO', 'Extracted source IPs from policy rules', {
+      policyId: policyEvent.policyId,
+      totalRules: policy.rules?.length || 0,
+      rulesWithIp: sourceIps.length,
+      uniqueIps: uniqueIps.length,
+      extractedIps: uniqueIps
+    });
+    console.log(JSON.stringify(extractionLogEntry));
+    
+    return uniqueIps;
+    
+  } catch (error) {
+    console.error(`Failed to extract source IPs from policy ${policyEvent.policyId}:`, {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      policyId: policyEvent.policyId
+    });
+    return [];
+  }
+}
+
+/**
+ * Validate IP address format
+ */
+function isValidIpAddress(ip: string): boolean {
+  const ipPattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+  return ipPattern.test(ip);
+}
+
+/**
+ * Helper function to check if IP is in CIDR block
+ * This duplicates logic from RequestContextManager but is needed here for finding matched CIDR
+ */
+function isIpInCidrBlock(ip: string, cidr: string): boolean {
+  try {
+    const [network, prefixLength] = cidr.split('/');
+    const prefix = parseInt(prefixLength, 10);
+    
+    if (isNaN(prefix) || prefix < 0 || prefix > 32) {
+      return false;
+    }
+
+    const ipNum = ipToNumber(ip);
+    const networkNum = ipToNumber(network);
+    const mask = (0xFFFFFFFF << (32 - prefix)) >>> 0;
+    
+    return (ipNum & mask) === (networkNum & mask);
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Convert IP address string to number
+ */
+function ipToNumber(ip: string): number {
+  const parts = ip.split('.');
+  if (parts.length !== 4) {
+    throw new Error(`Invalid IP address format: ${ip}`);
+  }
+  
+  return parts.reduce((acc, part) => {
+    const num = parseInt(part, 10);
+    if (isNaN(num) || num < 0 || num > 255) {
+      throw new Error(`Invalid IP address octet: ${part}`);
+    }
+    return (acc << 8) + num;
+  }, 0) >>> 0; // Unsigned 32-bit integer
 }

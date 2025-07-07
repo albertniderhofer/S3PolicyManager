@@ -1,7 +1,7 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, QueryCommand, PutCommand, UpdateCommand, GetCommand, DeleteCommand, BatchWriteCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
-import { PolicyRecord, Policy, UserPolicyRecord, NotFoundError, ConflictError } from './types';
+import { PolicyRecord, Policy, UserPolicyRecord, NotFoundError, ConflictError, Cidr, CidrRecord } from './types';
 import { RequestContextManager, ContextUtils } from './context';
 import { UserDisplayHelper } from './auth';
 
@@ -43,6 +43,48 @@ export class PolicyRepository {
 
     console.log('PolicyRepository initialized for region:', finalRegion, 'tableName:', finalTableName);
   }
+
+  /**
+   * Get all policies for the current tenant
+   * Automatically initializes if not already done (lazy initialization)
+   */
+  static async getAllCidr(): Promise<Cidr[]> {
+    // Lazy initialization - automatically initialize if not done yet
+    if (!this.client) {
+      this.initialize();
+    }
+
+    const tenantId = RequestContextManager.getTenantId();
+    
+    console.log(ContextUtils.createLogEntry('INFO', 'Fetching all Cidrs', { tenantId }));
+
+    const command = new QueryCommand({
+      TableName: this.tableName,
+      IndexName: 'TenantID-Created-Index',
+      KeyConditionExpression: 'TenantID = :tenantId',
+      ExpressionAttributeValues: {
+        ':tenantId': tenantId
+      },
+      ScanIndexForward: false // Most recent first
+    });
+
+    try {
+      const result = await this.client.send(command);
+      const cidrs = (result.Items || []).map(item => this.mapRecordToCidr(item as CidrRecord));
+      
+      console.log(ContextUtils.createLogEntry('INFO', 'Successfully fetched Cidrs', { 
+        count: cidrs.length 
+      }));
+
+      return cidrs;
+    } catch (error) {
+      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to fetch cidrs', { 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }));
+      throw new Error('Failed to retrieve cidrs');
+    }
+  }
+
 
   /**
    * Get all policies for the current tenant
@@ -402,6 +444,22 @@ export class PolicyRepository {
   }
 
   /**
+   * Map DynamoDB record to Cidr object
+   */
+  private static mapRecordToCidr(record: CidrRecord): Cidr {
+    try {
+      const cidr = JSON.parse(record.CidrContent) as Cidr;
+      return cidr;
+    } catch (error) {
+      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to parse cidr content', { 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }));
+      throw new Error('Invalid cidr data format');
+    }
+  }
+
+
+  /**
    * Get policies by state (for administrative purposes)
    */
   static async getPoliciesByState(state: PolicyRecord['State']): Promise<Policy[]> {
@@ -508,7 +566,9 @@ export class UserPolicyRepository {
 
     // Create UserPolicyRecord for each rule
     const userPolicyRecords: UserPolicyRecord[] = policy.rules.map(rule => {
-      const compositeKey = `${tenantId}#${rule.source.user}#${rule.destination.domains}`;
+      // Use either user email or IP address as the source identifier
+      const sourceIdentifier = rule.source.user || rule.source.ip || 'unknown';
+      const compositeKey = `${tenantId}#${sourceIdentifier}#${rule.destination.domains}`;
       
       return {
         PK: compositeKey,
@@ -516,7 +576,7 @@ export class UserPolicyRepository {
         TenantID: tenantId,
         RuleID: rule.id,
         RuleName: rule.name,
-        Source: rule.source.user,
+        Source: sourceIdentifier,
         Destination: rule.destination.domains,
         Action: rule.action,
         TimeRestrictions: rule.time,

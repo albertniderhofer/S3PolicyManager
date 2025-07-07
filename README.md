@@ -1,6 +1,6 @@
 # S3 Policy Manager
 
-A serverless AWS application for managing and deploying S3 bucket policies with multi-tenant support, built using AWS CDK, Lambda, DynamoDB, SQS, and Step Functions.
+A serverless AWS application for managing and deploying S3 bucket policies with multi-tenant support, built using AWS CDK, Lambda, DynamoDB, SQS.
 
 ## Overview
 
@@ -21,7 +21,7 @@ API Gateway → Lambda (API Handler) → DynamoDB (Policies)
 
 - ✅ **Multi-tenant architecture** with tenant isolation
 - ✅ **RESTful API** with JWT authentication
-- ✅ **Asynchronous policy processing** via SQS and Step Functions
+- ✅ **Asynchronous policy processing** via SQS
 - ✅ **Business rule validation** and conflict detection
 - ✅ **Policy lifecycle management** (draft → published → deleted)
 - ✅ **Event-driven architecture** for scalability
@@ -36,7 +36,6 @@ API Gateway → Lambda (API Handler) → DynamoDB (Policies)
   - **Policies Table**: Main policy storage with tenant isolation
   - **UserPolicies Table**: Individual rule storage indexed by tenant + source + destination
 - **SQS**: Asynchronous event processing with dead letter queues
-- **Step Functions**: Policy workflow orchestration
 - **Cognito**: User authentication and authorization
 
 ### SQS Event Processing
@@ -177,7 +176,6 @@ tests/                     # Test files
 | **DynamoDB** | http://localhost:8000 | Local DynamoDB |
 | **SQS** | http://localhost:9324 | Local SQS (ElasticMQ) |
 | **Cognito** | http://localhost:9229 | Local Cognito |
-| **Step Functions** | http://localhost:8083 | Local Step Functions |
 | **Lambda Functions** | http://localhost:3001-3004 | Direct Lambda access |
 
 ### Authentication in Development
@@ -383,7 +381,7 @@ This approach ensures that local development closely mirrors production behavior
 
 **Services not starting:**
 - Check Docker is running
-- Verify ports 3000-3004, 8000, 8083, 9229, 9324 are available
+- Verify ports 3000-3004, 8000, 9229, 9324 are available
 - Run `docker compose logs` to check for errors
 
 **API calls failing:**
@@ -407,7 +405,7 @@ This approach ensures that local development closely mirrors production behavior
    ```bash
    aws configure
    # Ensure you have appropriate permissions for:
-   # - Lambda, API Gateway, DynamoDB, SQS, Step Functions
+   # - Lambda, API Gateway, DynamoDB, SQS
    # - Cognito, CloudWatch, IAM
    ```
 
@@ -513,7 +511,6 @@ export ENABLE_BACKUP=true
 - **API Metrics**: Request count, latency, error rates
 - **Lambda Metrics**: Duration, memory usage, error rates
 - **DynamoDB Metrics**: Read/write capacity, throttling
-- **Step Functions**: Execution success/failure rates
 
 #### Alarms and Notifications
 ```bash
@@ -537,7 +534,6 @@ aws sns subscribe \
 #### IAM Roles and Policies
 - **Lambda Execution Role**: Minimal permissions for each function
 - **API Gateway Role**: CloudWatch logging permissions
-- **Step Functions Role**: Lambda invocation permissions
 
 #### Network Security (Production)
 ```bash

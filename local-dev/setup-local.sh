@@ -119,6 +119,53 @@ else
     echo "✅ UserPolicies table created successfully"
 fi
 
+# Check if IpCidrBlackList table already exists
+if aws dynamodb describe-table --table-name IpCidrBlackList --endpoint-url http://localhost:8000 --region us-east-1 --no-cli-pager >/dev/null 2>&1; then
+    echo "📋 Table IpCidrBlackList already exists, skipping creation"
+else
+    echo "🔨 Creating IpCidrBlackList table..."
+    # Create the IpCidrBlackList table
+    aws dynamodb create-table \
+        --table-name IpCidrBlackList \
+        --attribute-definitions \
+            AttributeName=PK,AttributeType=S \
+            AttributeName=SK,AttributeType=S \
+            AttributeName=TenantID,AttributeType=S \
+            AttributeName=Created,AttributeType=S \
+        --key-schema \
+            AttributeName=PK,KeyType=HASH \
+            AttributeName=SK,KeyType=RANGE \
+        --global-secondary-indexes \
+            '[
+                {
+                    "IndexName": "TenantID-Created-Index",
+                    "KeySchema": [
+                        {
+                            "AttributeName": "TenantID",
+                            "KeyType": "HASH"
+                        },
+                        {
+                            "AttributeName": "Created", 
+                            "KeyType": "RANGE"
+                        }
+                    ],
+                    "Projection": {
+                        "ProjectionType": "ALL"
+                    },
+                    "ProvisionedThroughput": {
+                        "ReadCapacityUnits": 5,
+                        "WriteCapacityUnits": 5
+                    }
+                }
+            ]' \
+        --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
+        --endpoint-url http://localhost:8000 \
+        --region us-east-1 \
+        --no-cli-pager
+    
+    echo "✅ IpCidrBlackList table created successfully"
+fi
+
 # SQS Local setup
 echo "📨 Setting up SQS Local..."
 
@@ -298,93 +345,97 @@ echo "   • Admin: admin@example.com / AdminPass123!"
 echo "   • User:  user@example.com / UserPass123!"
 echo "   • Tenant ID: 123e4567-e89b-12d3-a456-426614174000"
 
-# Step Functions Local setup
-echo "🔄 Setting up Step Functions Local..."
-
-# Create state machine definition
-cat > /tmp/policy-workflow-definition.json << 'EOF'
-{
-  "Comment": "Policy Management Workflow",
-  "StartAt": "ValidatePolicy",
-  "States": {
-    "ValidatePolicy": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:validate-policy",
-      "Next": "CheckValidation"
-    },
-    "CheckValidation": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.validationResult.isValid",
-          "BooleanEquals": true,
-          "Next": "PublishPolicy"
-        }
-      ],
-      "Default": "ValidationFailed"
-    },
-    "PublishPolicy": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:us-east-1:123456789012:function:publish-policy",
-      "Next": "WorkflowComplete"
-    },
-    "ValidationFailed": {
-      "Type": "Fail",
-      "Cause": "Policy validation failed"
-    },
-    "WorkflowComplete": {
-      "Type": "Succeed"
-    }
-  }
-}
-EOF
-
-# Create state machine
-aws stepfunctions create-state-machine \
-    --name policy-workflow-local \
-    --definition file:///tmp/policy-workflow-definition.json \
-    --role-arn arn:aws:iam::123456789012:role/StepFunctionsRole \
-    --endpoint-url http://localhost:8083 \
-    --region us-east-1 \
-    --no-cli-pager \
-    || echo "State machine might already exist"
-
-echo "✅ Step Functions state machine created"
 
 # Insert sample data
 echo "📝 Inserting sample data..."
 
-# Check if sample policy already exists
-if aws dynamodb get-item \
+# Always insert/update sample policy (overwrite if exists)
+echo "🔨 Inserting sample policy..."
+aws dynamodb put-item \
     --table-name policy-manager-local \
-    --key '{"PK": {"S": "TENANT#demo"}, "SK": {"S": "POLICY#sample-policy-1"}}' \
+    --item '{
+        "PK": {"S": "TENANT#demo"},
+        "SK": {"S": "POLICY#sample-policy-1"},
+        "TenantID": {"S": "demo"},
+        "PolicyID": {"S": "sample-policy-1"},
+        "PolicyContent": {"S": "{\"_id\":\"sample-policy-1\",\"name\":\"Sample Web Policy\",\"description\":\"Allow access to common websites\",\"enabled\":true,\"status\":\"draft\",\"rules\":[{\"id\":\"rule-1\",\"name\":\"Allow Google\",\"source\":{\"user\":\"*\"},\"destination\":{\"domains\":\"google.com\"},\"time\":{\"not_between\":[\"22:00\",\"06:00\"],\"days\":[\"monday\",\"tuesday\",\"wednesday\",\"thursday\",\"friday\"]},\"action\":\"allow\",\"track\":{\"log\":true,\"comment\":\"Standard web access\"}}],\"created\":\"2024-01-01T00:00:00Z\",\"updated\":\"2024-01-01T00:00:00Z\",\"createdBy\":\"admin\",\"updatedBy\":\"admin\"}"},
+        "State": {"S": "created"},
+        "Created": {"S": "2024-01-01T00:00:00Z"},
+        "Updated": {"S": "2024-01-01T00:00:00Z"},
+        "CreatedBy": {"S": "admin"},
+        "UpdatedBy": {"S": "admin"}
+    }' \
     --endpoint-url http://localhost:8000 \
     --region us-east-1 \
-    --no-cli-pager >/dev/null 2>&1; then
-    echo "📋 Sample policy already exists, skipping insertion"
-else
-    echo "🔨 Inserting sample policy..."
-    # Sample policy
-    aws dynamodb put-item \
-        --table-name policy-manager-local \
-        --item '{
-            "PK": {"S": "TENANT#demo"},
-            "SK": {"S": "POLICY#sample-policy-1"},
-            "TenantID": {"S": "demo"},
-            "PolicyID": {"S": "sample-policy-1"},
-            "PolicyContent": {"S": "{\"_id\":\"sample-policy-1\",\"name\":\"Sample Web Policy\",\"description\":\"Allow access to common websites\",\"enabled\":true,\"status\":\"draft\",\"rules\":[{\"id\":\"rule-1\",\"name\":\"Allow Google\",\"source\":{\"user\":\"*\"},\"destination\":{\"domains\":\"google.com\"},\"time\":{\"not_between\":[\"22:00\",\"06:00\"],\"days\":[\"monday\",\"tuesday\",\"wednesday\",\"thursday\",\"friday\"]},\"action\":\"allow\",\"track\":{\"log\":true,\"comment\":\"Standard web access\"}}],\"created\":\"2024-01-01T00:00:00Z\",\"updated\":\"2024-01-01T00:00:00Z\",\"createdBy\":\"admin\",\"updatedBy\":\"admin\"}"},
-            "State": {"S": "created"},
-            "Created": {"S": "2024-01-01T00:00:00Z"},
-            "Updated": {"S": "2024-01-01T00:00:00Z"},
-            "CreatedBy": {"S": "admin"},
-            "UpdatedBy": {"S": "admin"}
-        }' \
-        --endpoint-url http://localhost:8000 \
-        --region us-east-1 \
-        --no-cli-pager
-    
-    echo "✅ Sample data inserted"
-fi
+    --no-cli-pager
+
+echo "✅ Sample policy inserted"
+
+# Always insert/update sample CIDR data (overwrite if exists)
+echo "🔨 Inserting sample CIDR blacklist data..."
+
+# Generate UUIDs and timestamp for the CIDR records
+CIDR_ID_1=$(uuidgen | tr '[:upper:]' '[:lower:]')
+CIDR_ID_2=$(uuidgen | tr '[:upper:]' '[:lower:]')
+CIDR_ID_3=$(uuidgen | tr '[:upper:]' '[:lower:]')
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# First CIDR record: 192.168.1.0/23 (covers 192.168.1.0 - 192.168.2.255)
+aws dynamodb put-item \
+    --table-name IpCidrBlackList \
+    --item '{
+        "PK": {"S": "TENANT#123e4567-e89b-12d3-a456-426614174000"},
+        "SK": {"S": "CIDR#192.168.1.0/23"},
+        "TenantID": {"S": "123e4567-e89b-12d3-a456-426614174000"},
+        "CidrContent": {"S": "{\"_id\":\"'$CIDR_ID_1'\",\"cidr\":\"192.168.1.0/23\",\"description\":\"Internal network range 1\",\"created\":\"'$TIMESTAMP'\",\"updated\":\"'$TIMESTAMP'\",\"createdBy\":\"admin@example.com\",\"updatedBy\":\"admin@example.com\"}"},
+        "Created": {"S": "'$TIMESTAMP'"},
+        "Updated": {"S": "'$TIMESTAMP'"},
+        "CreatedBy": {"S": "admin@example.com"},
+        "UpdatedBy": {"S": "admin@example.com"}
+    }' \
+    --endpoint-url http://localhost:8000 \
+    --region us-east-1 \
+    --no-cli-pager
+
+# Second CIDR record: 192.10.1.0/23 (covers 192.10.1.0 - 192.10.2.255)
+aws dynamodb put-item \
+    --table-name IpCidrBlackList \
+    --item '{
+        "PK": {"S": "TENANT#123e4567-e89b-12d3-a456-426614174000"},
+        "SK": {"S": "CIDR#192.10.1.0/23"},
+        "TenantID": {"S": "123e4567-e89b-12d3-a456-426614174000"},
+        "CidrContent": {"S": "{\"_id\":\"'$CIDR_ID_2'\",\"cidr\":\"192.10.1.0/23\",\"description\":\"Internal network range 2\",\"created\":\"'$TIMESTAMP'\",\"updated\":\"'$TIMESTAMP'\",\"createdBy\":\"admin@example.com\",\"updatedBy\":\"admin@example.com\"}"},
+        "Created": {"S": "'$TIMESTAMP'"},
+        "Updated": {"S": "'$TIMESTAMP'"},
+        "CreatedBy": {"S": "admin@example.com"},
+        "UpdatedBy": {"S": "admin@example.com"}
+    }' \
+    --endpoint-url http://localhost:8000 \
+    --region us-east-1 \
+    --no-cli-pager
+
+# Third CIDR record: 10.0.0.0/8 (covers 10.0.0.0 - 10.255.255.255)
+aws dynamodb put-item \
+    --table-name IpCidrBlackList \
+    --item '{
+        "PK": {"S": "TENANT#123e4567-e89b-12d3-a456-426614174000"},
+        "SK": {"S": "CIDR#10.0.0.0/8"},
+        "TenantID": {"S": "123e4567-e89b-12d3-a456-426614174000"},
+        "CidrContent": {"S": "{\"_id\":\"'$CIDR_ID_3'\",\"cidr\":\"10.0.0.0/8\",\"description\":\"Private network range (Class A)\",\"created\":\"'$TIMESTAMP'\",\"updated\":\"'$TIMESTAMP'\",\"createdBy\":\"admin@example.com\",\"updatedBy\":\"admin@example.com\"}"},
+        "Created": {"S": "'$TIMESTAMP'"},
+        "Updated": {"S": "'$TIMESTAMP'"},
+        "CreatedBy": {"S": "admin@example.com"},
+        "UpdatedBy": {"S": "admin@example.com"}
+    }' \
+    --endpoint-url http://localhost:8000 \
+    --region us-east-1 \
+    --no-cli-pager
+
+echo "✅ Sample CIDR blacklist data inserted"
+echo "📋 CIDR Records Created:"
+echo "   • 192.168.1.0/23 (ID: $CIDR_ID_1) - Internal network range 1"
+echo "   • 192.10.1.0/23 (ID: $CIDR_ID_2) - Internal network range 2"
+echo "   • 10.0.0.0/8 (ID: $CIDR_ID_3) - Private network range (Class A)"
 
 echo ""
 echo "🎉 Local development environment setup complete!"
@@ -398,7 +449,6 @@ echo "   • Publish Policy:   http://localhost:3004"
 echo "   • DynamoDB:         http://localhost:8000"
 echo "   • SQS:              http://localhost:9324"
 echo "   • Cognito:          http://localhost:9229"
-echo "   • Step Functions:   http://localhost:8083"
 echo ""
 echo "🧪 Test the API:"
 echo "   curl http://localhost:3000/health"

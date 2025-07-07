@@ -5,8 +5,15 @@ export const PolicyRuleSchema = z.object({
   id: z.string().min(1, 'Rule ID is required'),
   name: z.string().min(1, 'Rule name is required'),
   source: z.object({
-    user: z.string().email('Valid email address required for user')
-  }),
+    user: z.string().email('Valid email address required for user').optional(),
+    ip: z.string().ip('Valid IP address required').optional()
+  }).refine(
+    (data) => data.user || data.ip,
+    {
+      message: 'Either user email or IP address must be specified in source',
+      path: ['source']
+    }
+  ),
   destination: z.object({
     domains: z.string().min(1, 'Destination domains/ARN is required')
   }),

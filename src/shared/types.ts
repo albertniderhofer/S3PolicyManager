@@ -2,7 +2,8 @@ export interface PolicyRule {
   id: string;
   name: string;
   source: {
-    user: string;
+    user?: string;
+    ip?: string;
   };
   destination: {
     domains: string;
@@ -31,6 +32,15 @@ export interface Policy {
   rules: PolicyRule[];
 }
 
+export interface Cidr {
+  _id: string;
+  cidr: string;
+  created: string;
+  updated: string;
+  createdBy: string;
+  updatedBy: string;
+}
+
 export interface PolicyRecord {
   PK: string;
   SK: string;
@@ -38,6 +48,17 @@ export interface PolicyRecord {
   TenantID: string;
   PolicyContent: string;
   State: 'created' | 'in-publish' | 'published' | 'deleted';
+  Created: string;
+  Updated: string;
+  CreatedBy: string;
+  UpdatedBy: string;
+}
+
+export interface CidrRecord {
+  PK: string;
+  SK: string;
+  TenantID: string;
+  CidrContent: string;
   Created: string;
   Updated: string;
   CreatedBy: string;
@@ -53,6 +74,7 @@ export interface RequestContext {
   timestamp: string;
   traceId?: string;
   correlationId?: string;
+  cidrBlackList?: string[];
 }
 
 export interface SQSEvent {

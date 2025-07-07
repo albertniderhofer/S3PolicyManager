@@ -88,6 +88,37 @@ export class PolicyManagerStack extends cdk.Stack {
       },
     });
 
+    // DynamoDB Table for ip CIDR black list (tenant-specific policies)
+    const ipCidrBlackListTable = new dynamodb.Table(this, 'IpCidrBlackListTable', {
+      tableName: `IpCidrBlackList-${environment}`,
+      partitionKey: {
+        name: 'PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'SK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecovery: environment === 'prod',
+      removalPolicy: environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+    });
+
+    // Add GSI for querying user policies by tenant
+    ipCidrBlackListTable.addGlobalSecondaryIndex({
+      indexName: 'TenantIndex',
+      partitionKey: {
+        name: 'TenantID',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'Created',
+        type: dynamodb.AttributeType.STRING,
+      },
+    });
+
     // Cognito User Pool (create new or use existing)
     if (props.cognitoUserPoolId) {
       this.userPool = cognito.UserPool.fromUserPoolId(
@@ -271,6 +302,7 @@ export class PolicyManagerStack extends cdk.Stack {
     // Grant SQS processor permissions to access DynamoDB tables
     this.table.grantReadWriteData(sqsProcessor);
     userPoliciesTable.grantReadWriteData(sqsProcessor);
+    ipCidrBlackListTable.grantReadWriteData(sqsProcessor);
 
     // Add SQS event source to processor
     sqsProcessor.addEventSource(new SqsEventSource(this.queue, {
@@ -384,6 +416,11 @@ export class PolicyManagerStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'UserPoliciesTableName', {
       value: userPoliciesTable.tableName,
       description: 'UserPolicies DynamoDB Table Name',
+    });
+
+    new cdk.CfnOutput(this, 'IpCidrBlackListTableName', {
+      value: ipCidrBlackListTable.tableName,
+      description: 'IpCidrBlackList DynamoDB Table Name',
     });
 
     new cdk.CfnOutput(this, 'QueueUrl', {
