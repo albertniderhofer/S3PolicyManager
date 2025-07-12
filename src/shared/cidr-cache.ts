@@ -1,4 +1,5 @@
-import { PolicyRepository } from './repository';
+import { RequestContextManager } from './context';
+import { PolicyRepository, CIDRRepository } from './repository';
 import { Cidr } from './types';
 
 /**
@@ -37,29 +38,9 @@ export class CidrCache {
   static async refreshCache(tenantId: string): Promise<void> {
     try {
       console.log(`Refreshing CIDR cache for tenant ${tenantId}`);
-      
-      // Temporarily set context for repository call
-      // Note: This assumes RequestContextManager is available
-      const { RequestContextManager } = await import('./context');
-      
-      // Store current context if exists
-      const wasInitialized = RequestContextManager.isInitialized();
-      let originalContext;
-      if (wasInitialized) {
-        originalContext = RequestContextManager.getFullContext();
-      }
-
-      // Set temporary context for this tenant
-      RequestContextManager.initializeForTesting(
-        tenantId,
-        'system-cidr-cache',
-        'cidr-cache-system',
-        ['System'],
-        `cidr-cache-${Date.now()}`
-      );
 
       // Fetch CIDR data from repository
-      const cidrRecords: Cidr[] = await PolicyRepository.getAllCidr();
+      const cidrRecords: Cidr[] = await CIDRRepository.getAllCidr(tenantId);
       const cidrList = cidrRecords.map(record => record.cidr);
 
       // Update cache
@@ -69,24 +50,7 @@ export class CidrCache {
       console.log(`Successfully refreshed CIDR cache for tenant ${tenantId}`, {
         count: cidrList.length,
         cidrs: cidrList
-      });
-
-      // Restore original context if it existed
-      if (wasInitialized && originalContext) {
-        RequestContextManager.initializeFromEvent({
-          tenantId: originalContext.tenantId,
-          userId: originalContext.userId,
-          username: originalContext.username,
-          requestId: originalContext.requestId,
-          timestamp: originalContext.timestamp,
-          userGroups: originalContext.groups,
-          traceId: originalContext.traceId,
-          correlationId: originalContext.correlationId
-        });
-      } else if (!wasInitialized) {
-        RequestContextManager.clear();
-      }
-
+      }); 
     } catch (error) {
       console.error(`Failed to refresh CIDR cache for tenant ${tenantId}:`, {
         error: error instanceof Error ? error.message : 'Unknown error',

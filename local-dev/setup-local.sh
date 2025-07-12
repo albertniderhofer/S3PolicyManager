@@ -14,13 +14,13 @@ sleep 10
 echo "📊 Setting up DynamoDB Local..."
 
 # Check if table already exists
-if aws dynamodb describe-table --table-name policy-manager-local --endpoint-url http://localhost:8000 --region us-east-1 --no-cli-pager >/dev/null 2>&1; then
+if aws dynamodb describe-table --table-name policies-local --endpoint-url http://localhost:8000 --region us-east-1 --no-cli-pager >/dev/null 2>&1; then
     echo "📋 Table policy-manager-local already exists, skipping creation"
 else
     echo "🔨 Creating DynamoDB table..."
     # Create the main table
     aws dynamodb create-table \
-        --table-name policy-manager-local \
+        --table-name policies-local \
         --attribute-definitions \
             AttributeName=PK,AttributeType=S \
             AttributeName=SK,AttributeType=S \
@@ -204,7 +204,7 @@ sleep 5
 # Create User Pool
 echo "🔨 Creating Cognito User Pool..."
 USER_POOL_RESPONSE=$(aws cognito-idp create-user-pool \
-    --pool-name "policy-manager-local" \
+    --pool-name "policies-local" \
     --policies '{
         "PasswordPolicy": {
             "MinimumLength": 8,
@@ -352,7 +352,7 @@ echo "📝 Inserting sample data..."
 # Always insert/update sample policy (overwrite if exists)
 echo "🔨 Inserting sample policy..."
 aws dynamodb put-item \
-    --table-name policy-manager-local \
+    --table-name policies-local \
     --item '{
         "PK": {"S": "TENANT#demo"},
         "SK": {"S": "POLICY#sample-policy-1"},
@@ -455,5 +455,5 @@ echo "   curl http://localhost:3000/health"
 echo "   curl http://localhost:3000/dev/policies"
 echo ""
 echo "🔍 View DynamoDB data:"
-echo "   aws dynamodb scan --table-name policy-manager-local --endpoint-url http://localhost:8000 --region us-east-1"
+echo "   aws dynamodb scan --table-name policies-local --endpoint-url http://localhost:8000 --region us-east-1"
 echo ""

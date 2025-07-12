@@ -241,35 +241,23 @@ export class TokenValidator {
   /**
    * Validate token and initialize context with tracing headers
    */
-  static async validateAndInitializeContextWithTracing(event: APIGatewayProxyEvent): Promise<void> {
-    // Extract tracing headers from the event (headers are normalized to lowercase)
-    const traceId = event.headers['x-trace-id'] || event.headers['X-Trace-Id'];
-    const correlationId = event.headers['x-correlation-id'] || event.headers['X-Correlation-Id'] || event.requestContext.requestId;
+  static async validateAndInitializeContextWithTracing(event: APIGatewayProxyEvent, correlationId: string): Promise<RequestContextManager> {
     
     // Validate the token first
     const payload = await this.validateToken(event);
     
-    // Initialize context with tracing headers
-    RequestContextManager.initializeFromEvent({
-      tenantId: payload['custom:tenant_id'],
-      userId: payload.sub,
+    let request: CognitoTokenPayload = {
+      'custom:tenant_id': payload['custom:tenant_id'],
+      sub: payload.sub,
       username: payload.username,
-      requestId: event.requestContext.requestId,
-      timestamp: new Date().toISOString(),
-      userGroups: payload['cognito:groups'] || [],
-      traceId,
-      correlationId
-    });
-  }
+      exp: payload.exp,
+      iss: payload.iss,
+      token_use: payload.token_use,
+      aud: payload.aud,
+      'cognito:groups': payload['cognito:groups'] || []
+    }
 
-  /**
-   * Validate and initialize request context
-   */
-  static async validateAndInitializeContext(event: APIGatewayProxyEvent): Promise<void> {
-    const tokenPayload = await this.validateToken(event);
-    const requestId = event.requestContext.requestId;
-    
-    RequestContextManager.initialize(tokenPayload, requestId);
+    return new RequestContextManager(request, correlationId);
   }
 }
 
@@ -395,41 +383,5 @@ export class UserDisplayHelper {
     }
     
     return transformed;
-  }
-}
-
-/**
- * Authorization helper functions
- */
-export class AuthorizationHelper {
-  /**
-   * Ensure user has admin privileges
-   */
-  static requireAdmin(): void {
-    if (!RequestContextManager.isAdmin()) {
-      throw new UnauthorizedError('Admin privileges required');
-    }
-  }
-
-  /**
-   * Ensure user belongs to specific tenant
-   */
-  static requireTenant(requiredTenantId: string): void {
-    const currentTenantId = RequestContextManager.getTenantId();
-    if (currentTenantId !== requiredTenantId) {
-      throw new UnauthorizedError(`Access denied: Invalid tenant access`);
-    }
-  }
-
-  /**
-   * Check if user has any of the required groups
-   */
-  static requireAnyGroup(requiredGroups: string[]): void {
-    const userGroups = RequestContextManager.getUserGroups();
-    const hasRequiredGroup = requiredGroups.some(group => userGroups.includes(group));
-    
-    if (!hasRequiredGroup) {
-      throw new UnauthorizedError(`Access denied: Required groups: ${requiredGroups.join(', ')}`);
-    }
   }
 }

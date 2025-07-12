@@ -1,321 +1,113 @@
-import { APIGatewayProxyEvent } from 'aws-lambda';
-import { RequestContext, CognitoTokenPayload } from './types';
-import { CidrCache } from './cidr-cache';
-import { CidrUtils } from './cidr';
+import { APIGatewayProxyEvent, SQSRecord } from 'aws-lambda';
+import { RequestContext, CognitoTokenPayload, SQSEvent } from './types';
+
 
 /**
- * Global Request Context Manager
- * Provides centralized access to request context including tenant isolation
+ * Request Context Manager - Instance-based for proper tenant isolation
+ * Each Lambda invocation should create its own instance
  */
 export class RequestContextManager {
-  private static context: RequestContext | null = null;
+  private context: RequestContext | SQSEvent;
+  private correlationId: string;
 
-  /**
-   * Initialize context from token payload and request ID
-   */
-  static initialize(tokenPayload: CognitoTokenPayload, requestId: string): void {
-    this.context = {
-      tenantId: tokenPayload['custom:tenant_id'],
-      userId: tokenPayload.sub,
-      username: tokenPayload.username,
-      groups: tokenPayload['cognito:groups'] || [],
-      requestId,
-      timestamp: new Date().toISOString()
-    };
+  private isCognitoTokenPayload(obj: any): obj is CognitoTokenPayload {
+    return typeof obj.sub === "string" && typeof obj.exp === "string";
+  }
+
+  private isSQSEvent(obj: any): obj is SQSEvent {
+    return typeof obj.policyId === "string" && typeof obj.tenantId === "string";
   }
 
   /**
-   * Initialize context from event data (for Step Functions and API Gateway)
+   * Constructor from token payload and request ID
    */
-  static async initializeFromEvent(eventContext: {
-    tenantId: string;
-    userId?: string;
-    username: string;
-    requestId: string;
-    timestamp: string;
-    userGroups: string[];
-    traceId?: string;
-    correlationId?: string;
-  }): Promise<void> {
-    this.context = {
-      tenantId: eventContext.tenantId,
-      userId: eventContext.userId || `system-${eventContext.username}`,
-      username: eventContext.username,
-      groups: eventContext.userGroups,
-      requestId: eventContext.requestId,
-      timestamp: eventContext.timestamp,
-      traceId: eventContext.traceId,
-      correlationId: eventContext.correlationId
-    };
-
-    // Load CIDR blacklist for this tenant
-    await this.loadCidrBlacklist();
-  }
-
-  /**
-   * Get the current tenant ID - used for all database operations
-   */
-  static getTenantId(): string {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
+  constructor(tokenPayload: CognitoTokenPayload | SQSEvent, correlationId: string) {
+    if (this.isCognitoTokenPayload(tokenPayload)) {
+      this.context = {
+        tenantId: tokenPayload['custom:tenant_id'],
+        userId: tokenPayload.sub,
+        username: tokenPayload.username,
+        groups: tokenPayload['cognito:groups'] || [],
+        correlationId: correlationId,
+        timestamp: new Date().toISOString()
+      };
     }
-    return this.context.tenantId;
-  }
-
-  /**
-   * Get the current username - used for audit trails
-   */
-  static getUsername(): string {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
+    else if (this.isSQSEvent(tokenPayload)) {
+      this.context = {
+          eventType: tokenPayload.eventType,
+          policyId: tokenPayload.policyId,
+          tenantId: tokenPayload.tenantId,
+          timestamp: tokenPayload.timestamp,
+          triggeredBy: tokenPayload.triggeredBy,
+          correlationId: correlationId,
+        }  
     }
-    return this.context.username;
+
+  }
+
+  getRequestContext(): RequestContext  {
+    return this.context as RequestContext;
+  }
+
+  getEventContext(): SQSEvent  {
+    return this.context as SQSEvent;
   }
 
   /**
-   * Get the current user ID
+   * Static method for testing purposes - creates a test instance
    */
-  static getUserId(): string {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-    return this.context.userId;
-  }
-
-  /**
-   * Get user groups for authorization checks
-   */
-  static getUserGroups(): string[] {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-    return this.context.groups;
-  }
-
-  /**
-   * Get the request ID for logging and tracing
-   */
-  static getRequestId(): string {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-    return this.context.requestId;
-  }
-
-  /**
-   * Get the request timestamp
-   */
-  static getTimestamp(): string {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-    return this.context.timestamp;
-  }
-
-  /**
-   * Get the trace ID for distributed tracing
-   */
-  static getTraceId(): string | undefined {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-    return this.context.traceId;
-  }
-
-  /**
-   * Get the correlation ID for request correlation
-   */
-  static getCorrelationId(): string | undefined {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-    return this.context.correlationId;
-  }
-
-  /**
-   * Get the full request context
-   */
-  static getFullContext(): RequestContext {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-    return { ...this.context };
-  }
-
-  /**
-   * Check if user has admin privileges
-   */
-  static isAdmin(): boolean {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-    return this.context.groups.includes('Admin');
-  }
-
-  /**
-   * Clear the context (useful for testing)
-   */
-  static clear(): void {
-    this.context = null;
-  }
-
-  /**
-   * Check if context is initialized
-   */
-  static isInitialized(): boolean {
-    return this.context !== null;
-  }
-
-  /**
-   * Create a context for testing purposes
-   */
-  static initializeForTesting(
+  createRequestContextForTesting(
     tenantId: string,
     userId: string,
     username: string,
     groups: string[] = ['Admin'],
     requestId: string = 'test-request-id'
-  ): void {
-    this.context = {
-      tenantId,
-      userId,
-      username,
-      groups,
-      requestId,
-      timestamp: new Date().toISOString()
+  ): RequestContextManager {
+    const testPayload: CognitoTokenPayload = {
+      'custom:tenant_id': tenantId,
+      sub: userId,
+      username: username,
+      'cognito:groups': groups,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      iss: 'test',
+      aud: 'test',
+      token_use: 'access'
     };
+    return new RequestContextManager(testPayload, requestId);
   }
 
   /**
-   * Load CIDR blacklist for current tenant and store in context
+   * Create audit trail object with curren request context
    */
-  private static async loadCidrBlacklist(): Promise<void> {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-
-    try {
-      const cidrList = await CidrCache.getCidrList(this.context.tenantId);
-      this.context.cidrBlackList = cidrList;
-      
-      console.log(`Loaded ${cidrList.length} CIDR entries for tenant ${this.context.tenantId}`, {
-        tenantId: this.context.tenantId,
-        requestId: this.context.requestId,
-        cidrCount: cidrList.length
-      });
-    } catch (error) {
-      console.warn(`Failed to load CIDR blacklist for tenant ${this.context.tenantId}, continuing without CIDR checking:`, {
-        tenantId: this.context.tenantId,
-        requestId: this.context.requestId,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-      
-      // Continue with empty CIDR list as per requirement
-      this.context.cidrBlackList = [];
-    }
-  }
-
-  /**
-   * Get CIDR blacklist from context
-   */
-  static getCidrBlacklist(): string[] {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-    return this.context.cidrBlackList || [];
-  }
-
-  /**
-   * Check if an IP address is blacklisted
-   */
-  static isIpBlacklisted(ip: string): boolean {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-
-    const cidrList = this.context.cidrBlackList || [];
-    if (cidrList.length === 0) {
-      return false;
-    }
-
-    // Check IP against each CIDR block
-      if (CidrUtils.isIpInAnyCidrBlock(ip, cidrList)) {
-        console.log(`IP ${ip} matches CIDR blacklist: ${cidrList}`, {
-          ip,
-          tenantId: this.context.tenantId,
-          requestId: this.context.requestId
-        });
-        return true;
-      }
-    return false;
-  }
-
-  /**
-   * Refresh CIDR cache for current tenant
-   */
-  static async refreshCidrCache(): Promise<void> {
-    if (!this.context) {
-      throw new Error('Request context not initialized. Call initialize() first.');
-    }
-
-    try {
-      await CidrCache.refreshCache(this.context.tenantId);
-      await this.loadCidrBlacklist(); // Reload into context
-      
-      console.log(`Successfully refreshed CIDR cache for tenant ${this.context.tenantId}`, {
-        tenantId: this.context.tenantId,
-        requestId: this.context.requestId,
-        newCidrCount: this.context.cidrBlackList?.length || 0
-      });
-    } catch (error) {
-      console.error(`Failed to refresh CIDR cache for tenant ${this.context.tenantId}:`, {
-        tenantId: this.context.tenantId,
-        requestId: this.context.requestId,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-      throw error;
-    }
-  }
-}
-
-/**
- * Context utilities for common operations
- */
-export class ContextUtils {
-  /**
-   * Extract request ID from API Gateway event
-   */
-  static extractRequestId(event: APIGatewayProxyEvent): string {
-    return event.requestContext.requestId;
-  }
-
-  /**
-   * Create audit trail object with current context
-   */
-  static createAuditTrail(action: string, resourceId?: string): {
+  createRequestAuditTrail(contextManager: RequestContextManager, action: string, resourceId?: string): {
     action: string;
     resourceId?: string;
     tenantId: string;
     userId: string;
     username: string;
     timestamp: string;
-    requestId: string;
+    correlationId: string;
   } {
     return {
       action,
       resourceId,
-      tenantId: RequestContextManager.getTenantId(),
-      userId: RequestContextManager.getUserId(),
-      username: RequestContextManager.getUsername(),
-      timestamp: RequestContextManager.getTimestamp(),
-      requestId: RequestContextManager.getRequestId()
+      tenantId: (this.context as RequestContext).tenantId ,
+      userId: (this.context as RequestContext).userId ,
+      username: (this.context as RequestContext).username ,
+      timestamp: (this.context as RequestContext).timestamp ,
+      correlationId: this.correlationId,
     };
   }
 
   /**
+   * TBD: Create audit trail object with current event context
+   */
+
+
+  /**
    * Create standardized log entry with context
    */
-  static createLogEntry(
+  createLogEntry(
     level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG',
     message: string,
     metadata?: Record<string, any>
@@ -323,25 +115,16 @@ export class ContextUtils {
     level: string;
     message: string;
     tenantId: string;
-    userId: string;
-    requestId: string;
     timestamp: string;
-    traceId?: string;
     correlationId?: string;
     metadata?: Record<string, any>;
-  } {
-    const traceId = RequestContextManager.getTraceId();
-    const correlationId = RequestContextManager.getCorrelationId();
-    
+  } {    
     return {
       level,
       message,
-      tenantId: RequestContextManager.getTenantId(),
-      userId: RequestContextManager.getUserId(),
-      requestId: RequestContextManager.getRequestId(),
-      timestamp: RequestContextManager.getTimestamp(),
-      ...(traceId && { traceId }),
-      ...(correlationId && { correlationId }),
+      tenantId: this.context.tenantId,
+      timestamp: this.context.timestamp,
+     correlationId: this.correlationId,
       ...(metadata && { metadata })
     };
   }
@@ -349,10 +132,9 @@ export class ContextUtils {
   /**
    * Validate tenant access to resource
    */
-  static validateTenantAccess(resourceTenantId: string): void {
-    const currentTenantId = RequestContextManager.getTenantId();
-    if (resourceTenantId !== currentTenantId) {
-      throw new Error(`Access denied: Resource belongs to different tenant. Current: ${currentTenantId}, Resource: ${resourceTenantId}`);
+  validateTenantAccess(resourceTenantId: string): void {
+    if (resourceTenantId !== this.context.tenantId) {
+      throw new Error(`Access denied: Resource belongs to different tenant. Current: ${this.context.tenantId}, Resource: ${resourceTenantId}`);
     }
   }
 }

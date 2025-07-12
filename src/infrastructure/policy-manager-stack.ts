@@ -28,7 +28,7 @@ export class PolicyManagerStack extends cdk.Stack {
 
     // DynamoDB Table for policies
     this.table = new dynamodb.Table(this, 'PolicyTable', {
-      tableName: `policy-manager-${environment}`,
+      tableName: `Policies-${environment}`,
       partitionKey: {
         name: 'PK',
         type: dynamodb.AttributeType.STRING,
@@ -128,7 +128,7 @@ export class PolicyManagerStack extends cdk.Stack {
       );
     } else {
       this.userPool = new cognito.UserPool(this, 'PolicyManagerUserPool', {
-        userPoolName: `policy-manager-${environment}`,
+        userPoolName: `policies-${environment}`,
         selfSignUpEnabled: false,
         signInAliases: {
           email: true,
@@ -174,7 +174,7 @@ export class PolicyManagerStack extends cdk.Stack {
       // Create User Pool Client for production authentication
       const userPoolClient = new cognito.UserPoolClient(this, 'PolicyManagerUserPoolClient', {
         userPool: this.userPool,
-        userPoolClientName: `policy-manager-client-${environment}`,
+        userPoolClientName: `policies-client-${environment}`,
         authFlows: {
           adminUserPassword: true,
           userPassword: true,

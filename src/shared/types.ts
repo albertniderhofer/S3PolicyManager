@@ -69,11 +69,9 @@ export interface RequestContext {
   userId: string;
   username: string;
   groups: string[];
-  requestId: string;
   timestamp: string;
   traceId?: string;
   correlationId?: string;
-  cidrBlackList?: string[];
 }
 
 export interface SQSEvent {
@@ -82,6 +80,7 @@ export interface SQSEvent {
   tenantId: string;
   timestamp: string;
   triggeredBy: string;
+  correlationId?: string;
 }
 
 export interface CognitoTokenPayload {

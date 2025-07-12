@@ -3,7 +3,7 @@ import { TokenValidator } from '../../shared/auth';
 import { PolicyRepository, UserPolicyRepository } from '../../shared/repository';
 import { SQSService } from '../../shared/sqs';
 import { SchemaValidator } from '../../shared/schema';
-import { RequestContextManager, ContextUtils } from '../../shared/context';
+import { RequestContextManager } from '../../shared/context';
 import { 
   APIResponse, 
   ErrorResponse, 
@@ -21,8 +21,12 @@ import {
 // Services will auto-initialize using environment variables when first used
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+
+  let context: RequestContextManager;
+  let contextIsInitialized: boolean = false;
+
+
   // Extract tracing headers from the event (headers are normalized to lowercase)
-  const traceId = event.headers['x-trace-id'] || event.headers['X-Trace-Id'];
   const correlationId = event.headers['x-correlation-id'] || event.headers['X-Correlation-Id'] || event.requestContext.requestId;
   
   console.log('API Handler invoked:', {
@@ -30,7 +34,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     path: event.path,
     pathParameters: event.pathParameters,
     requestId: event.requestContext.requestId,
-    traceId,
     correlationId,
     userAgent: event.headers['user-agent'] || event.headers['User-Agent'],
     sourceIp: event.requestContext.identity?.sourceIp
@@ -38,10 +41,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
   try {
     // Validate token and initialize context with tracing headers
-    await TokenValidator.validateAndInitializeContextWithTracing(event);
+    context = await TokenValidator.validateAndInitializeContextWithTracing(event, correlationId);
+    contextIsInitialized = true;
 
     // Log with structured context after authentication
-    const logEntry = ContextUtils.createLogEntry('INFO', 'Request authenticated and routed', {
+    const logEntry = context.createLogEntry('INFO', 'Request authenticated and routed', {
       httpMethod: event.httpMethod,
       path: event.path,
       pathParameters: event.pathParameters
@@ -49,32 +53,19 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     console.log(JSON.stringify(logEntry));
 
     // Route the request
-    const result = await routeRequest(event);
+    const result = await routeRequest(context, event);
     
     return createSuccessResponse(result);
   } catch (error) {
-    // Log error with full context if available
-    if (RequestContextManager.isInitialized()) {
-      const errorLogEntry = ContextUtils.createLogEntry('ERROR', 'API Handler error', {
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-        traceId,
-        correlationId,
-        httpMethod: event.httpMethod,
-        path: event.path
-      });
-      console.error(JSON.stringify(errorLogEntry));
-    } else {
       console.error('API Handler error (context not initialized):', {
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
         requestId: event.requestContext.requestId,
-        traceId,
         correlationId,
         httpMethod: event.httpMethod,
         path: event.path
       });
-    }
+    
     return createErrorResponse(error);
   }
 };
@@ -82,14 +73,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 /**
  * Route requests based on HTTP method and path
  */
-async function routeRequest(event: APIGatewayProxyEvent): Promise<any> {
+async function routeRequest(context: RequestContextManager, event: APIGatewayProxyEvent): Promise<any> {
   const { httpMethod, path, pathParameters } = event;
   const policyId = pathParameters?.id;
 
   // Check if this is a user-policies request
   if (path === '/user-policies' || path.startsWith('/user-policies/')) {
     console.log('ROUTING: Going to user-policies route');
-    return await routeUserPoliciesRequest(event);
+    return await routeUserPoliciesRequest(context, event);
   }
 
   console.log('ROUTING: Going to regular policies route');
@@ -98,25 +89,25 @@ async function routeRequest(event: APIGatewayProxyEvent): Promise<any> {
   switch (httpMethod) {
     case 'GET':
       if (policyId) {
-        return await getPolicyById(policyId);
+        return await getPolicyById(context, policyId);
       } else {
-        return await getAllPolicies();
+        return await getAllPolicies(context);
       }
 
     case 'POST':
-      return await createPolicy(event.body);
+      return await createPolicy(context, event.body);
 
     case 'PUT':
       if (!policyId) {
         throw new ValidationError('Policy ID is required for updates');
       }
-      return await updatePolicy(policyId, event.body);
+      return await updatePolicy(context, policyId, event.body);
 
     case 'DELETE':
       if (!policyId) {
         throw new ValidationError('Policy ID is required for deletion');
       }
-      return await deletePolicy(policyId);
+      return await deletePolicy(context, policyId);
 
     default:
       throw new ValidationError(`HTTP method ${httpMethod} not supported`);
@@ -126,12 +117,12 @@ async function routeRequest(event: APIGatewayProxyEvent): Promise<any> {
 /**
  * Route user-policies requests
  */
-async function routeUserPoliciesRequest(event: APIGatewayProxyEvent): Promise<any> {
+async function routeUserPoliciesRequest(context: RequestContextManager, event: APIGatewayProxyEvent): Promise<any> {
   const { httpMethod, path } = event;
 
   switch (httpMethod) {
     case 'GET':
-        return await getAllUserPolicies();
+        return await getAllUserPolicies(context);
     default:
       throw new ValidationError(`HTTP method ${httpMethod} not supported for user-policies`);
   }
@@ -140,13 +131,13 @@ async function routeUserPoliciesRequest(event: APIGatewayProxyEvent): Promise<an
 /**
  * Get all policies for the current tenant
  */
-async function getAllPolicies() {
-  const logEntry = ContextUtils.createLogEntry('INFO', 'Getting all policies for tenant');
+async function getAllPolicies(context: RequestContextManager) {
+  const logEntry = context.createLogEntry('INFO', 'Getting all policies for tenant');
   console.log(JSON.stringify(logEntry));
   
-  const policies = await PolicyRepository.getAllPolicies();
+  const policies = await PolicyRepository.getAllPolicies(context);
   
-  const resultLogEntry = ContextUtils.createLogEntry('INFO', 'Retrieved policies successfully', {
+  const resultLogEntry = context.createLogEntry('INFO', 'Retrieved policies successfully', {
     policyCount: policies.length
   });
   console.log(JSON.stringify(resultLogEntry));
@@ -160,14 +151,14 @@ async function getAllPolicies() {
 /**
  * Get all user policies for the current tenant
  */
-async function getAllUserPolicies() {
-  const logEntry = ContextUtils.createLogEntry('INFO', 'Getting all user policies for tenant');
+async function getAllUserPolicies(context: RequestContextManager) {
+  const logEntry = context.createLogEntry('INFO', 'Getting all user policies for tenant');
   console.log(JSON.stringify(logEntry));
   
-  const tenantId = RequestContextManager.getTenantId();
-  const userPolicies = await UserPolicyRepository.getAllUserPolicies(tenantId);
+  const tenantId = context.getRequestContext().tenantId;
+  const userPolicies = await UserPolicyRepository.getAllUserPolicies(context, tenantId);
   
-  const resultLogEntry = ContextUtils.createLogEntry('INFO', 'Retrieved user policies successfully', {
+  const resultLogEntry = context.createLogEntry('INFO', 'Retrieved user policies successfully', {
     userPolicyCount: userPolicies.length
   });
   console.log(JSON.stringify(resultLogEntry));
@@ -181,15 +172,15 @@ async function getAllUserPolicies() {
 /**
  * Get a specific policy by ID
  */
-async function getPolicyById(policyId: string) {
-  const logEntry = ContextUtils.createLogEntry('INFO', 'Getting policy by ID', {
+async function getPolicyById(context: RequestContextManager, policyId: string) {
+  const logEntry = context.createLogEntry('INFO', 'Getting policy by ID', {
     policyId
   });
   console.log(JSON.stringify(logEntry));
   
-  const policy = await PolicyRepository.getPolicyById(policyId);
+  const policy = await PolicyRepository.getPolicyById(context, policyId);
   
-  const resultLogEntry = ContextUtils.createLogEntry('INFO', 'Retrieved policy successfully', {
+  const resultLogEntry = context.createLogEntry('INFO', 'Retrieved policy successfully', {
     policyId,
     policyName: policy.name,
     policyStatus: policy.status
@@ -202,19 +193,19 @@ async function getPolicyById(policyId: string) {
 /**
  * Create a new policy
  */
-async function createPolicy(requestBody: string | null) {
+async function createPolicy(context: RequestContextManager, requestBody: string | null) {
   if (!requestBody) {
     throw new ValidationError('Request body is required');
   }
 
-  const logEntry = ContextUtils.createLogEntry('INFO', 'Creating new policy');
+  const logEntry = context.createLogEntry('INFO', 'Creating new policy');
   console.log(JSON.stringify(logEntry));
   
   let policyData;
   try {
     policyData = JSON.parse(requestBody);
   } catch (error) {
-    const errorLogEntry = ContextUtils.createLogEntry('ERROR', 'Invalid JSON in request body', {
+    const errorLogEntry = context.createLogEntry('ERROR', 'Invalid JSON in request body', {
       error: error instanceof Error ? error.message : String(error)
     });
     console.error(JSON.stringify(errorLogEntry));
@@ -224,19 +215,19 @@ async function createPolicy(requestBody: string | null) {
   // Validate the policy data
   const validatedData = SchemaValidator.validatePolicyCreate(policyData);
   
-  const validationLogEntry = ContextUtils.createLogEntry('INFO', 'Policy data validated successfully', {
+  const validationLogEntry = context.createLogEntry('INFO', 'Policy data validated successfully', {
     policyName: validatedData.name,
     rulesCount: validatedData.rules?.length || 0
   });
   console.log(JSON.stringify(validationLogEntry));
   
   // Create the policy
-  const policy = await PolicyRepository.createPolicy(validatedData);
+  const policy = await PolicyRepository.createPolicy(context, validatedData);
   
   // Publish create event to SQS
-  await SQSService.publishPolicyEvent('create', policy._id);
+  await SQSService.publishPolicyEvent(context, 'create', policy._id);
   
-  const successLogEntry = ContextUtils.createLogEntry('INFO', 'Policy created and event published', {
+  const successLogEntry = context.createLogEntry('INFO', 'Policy created and event published', {
     policyId: policy._id,
     policyName: policy.name,
     policyStatus: policy.status
@@ -252,12 +243,12 @@ async function createPolicy(requestBody: string | null) {
 /**
  * Update an existing policy
  */
-async function updatePolicy(policyId: string, requestBody: string | null) {
+async function updatePolicy(context: RequestContextManager, policyId: string, requestBody: string | null) {
   if (!requestBody) {
     throw new ValidationError('Request body is required');
   }
 
-  const logEntry = ContextUtils.createLogEntry('INFO', 'Updating policy', {
+  const logEntry = context.createLogEntry('INFO', 'Updating policy', {
     policyId
   });
   console.log(JSON.stringify(logEntry));
@@ -266,7 +257,7 @@ async function updatePolicy(policyId: string, requestBody: string | null) {
   try {
     updateData = JSON.parse(requestBody);
   } catch (error) {
-    const errorLogEntry = ContextUtils.createLogEntry('ERROR', 'Invalid JSON in request body', {
+    const errorLogEntry = context.createLogEntry('ERROR', 'Invalid JSON in request body', {
       policyId,
       error: error instanceof Error ? error.message : String(error)
     });
@@ -277,19 +268,19 @@ async function updatePolicy(policyId: string, requestBody: string | null) {
   // Validate the update data
   const validatedData = SchemaValidator.validatePolicyUpdate(updateData);
   
-  const validationLogEntry = ContextUtils.createLogEntry('INFO', 'Policy update data validated successfully', {
+  const validationLogEntry = context.createLogEntry('INFO', 'Policy update data validated successfully', {
     policyId,
     updatedFields: Object.keys(validatedData)
   });
   console.log(JSON.stringify(validationLogEntry));
   
   // Update the policy
-  const policy = await PolicyRepository.updatePolicy(policyId, validatedData);
+  const policy = await PolicyRepository.updatePolicy(context, policyId, validatedData);
   
   // Publish update event to SQS
-  await SQSService.publishPolicyEvent('update', policyId);
+  await SQSService.publishPolicyEvent(context, 'update', policyId);
   
-  const successLogEntry = ContextUtils.createLogEntry('INFO', 'Policy updated and event published', {
+  const successLogEntry = context.createLogEntry('INFO', 'Policy updated and event published', {
     policyId,
     policyName: policy.name,
     policyStatus: policy.status
@@ -305,19 +296,19 @@ async function updatePolicy(policyId: string, requestBody: string | null) {
 /**
  * Delete a policy
  */
-async function deletePolicy(policyId: string) {
-  const logEntry = ContextUtils.createLogEntry('INFO', 'Deleting policy', {
+async function deletePolicy(context: RequestContextManager, policyId: string) {
+  const logEntry = context.createLogEntry('INFO', 'Deleting policy', {
     policyId
   });
   console.log(JSON.stringify(logEntry));
   
   // Delete the policy (soft delete)
-  await PolicyRepository.deletePolicy(policyId);
+  await PolicyRepository.deletePolicy(context, policyId);
   
   // Publish delete event to SQS
-  await SQSService.publishPolicyEvent('delete', policyId);
+  await SQSService.publishPolicyEvent(context, 'delete', policyId);
   
-  const successLogEntry = ContextUtils.createLogEntry('INFO', 'Policy deleted and event published', {
+  const successLogEntry = context.createLogEntry('INFO', 'Policy deleted and event published', {
     policyId
   });
   console.log(JSON.stringify(successLogEntry));

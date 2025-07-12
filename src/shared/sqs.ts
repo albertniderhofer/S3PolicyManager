@@ -1,6 +1,6 @@
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { SQSEvent } from './types';
-import { RequestContextManager, ContextUtils } from './context';
+import { RequestContextManager } from './context';
 
 /**
  * SQS Service for publishing policy events
@@ -44,28 +44,27 @@ export class SQSService {
    * Automatically initializes if not already done (lazy initialization)
    */
   static async publishPolicyEvent(
+    context: RequestContextManager,
     eventType: SQSEvent['eventType'],
-    policyId: string
+    policyId: string,
   ): Promise<void> {
     // Lazy initialization - automatically initialize if not done yet
     if (!this.client) {
       this.initialize();
     }
-
-    const context = RequestContextManager.getFullContext();
     
     const event: SQSEvent = {
       eventType,
       policyId,
-      tenantId: context.tenantId,
-      timestamp: context.timestamp,
-      triggeredBy: context.username
+      tenantId: context.getRequestContext().tenantId,
+      timestamp: context.getRequestContext().timestamp,
+      triggeredBy: context.getRequestContext().username
     };
 
-    console.log(ContextUtils.createLogEntry('INFO', 'Publishing SQS event', {
+    console.log(context.createLogEntry('INFO', 'Publishing SQS event', {
       eventType,
       policyId,
-      tenantId: context.tenantId
+      tenantId: context.getRequestContext().tenantId
     }));
 
     const command = new SendMessageCommand({
@@ -78,7 +77,7 @@ export class SQSService {
         },
         tenantId: {
           DataType: 'String',
-          StringValue: context.tenantId
+          StringValue: context.getRequestContext().tenantId
         },
         policyId: {
           DataType: 'String',
@@ -90,13 +89,13 @@ export class SQSService {
     try {
       const result = await this.client.send(command);
       
-      console.log(ContextUtils.createLogEntry('INFO', 'Successfully published SQS event', {
+      console.log(context.createLogEntry('INFO', 'Successfully published SQS event', {
         eventType,
         policyId,
         messageId: result.MessageId
       }));
     } catch (error) {
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to publish SQS event', {
+      console.error(context.createLogEntry( 'ERROR', 'Failed to publish SQS event', {
         eventType,
         policyId,
         error: error instanceof Error ? error.message : 'Unknown error'

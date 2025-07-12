@@ -82,7 +82,8 @@ export const SQSEventSchema = z.object({
   policyId: z.string().uuid('Policy ID must be a valid UUID'),
   tenantId: z.string().uuid('Tenant ID must be a valid UUID'),
   timestamp: z.string().datetime('Invalid datetime format for timestamp'),
-  triggeredBy: z.string().min(1, 'Triggered by field is required')
+  triggeredBy: z.string().min(1, 'Triggered by field is required'),
+  correlationId: z.string().min(1, 'Correlation Id field is required')
 });
 
 // Request Context Schema

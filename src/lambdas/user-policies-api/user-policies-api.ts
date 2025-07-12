@@ -1,7 +1,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { TokenValidator } from '../../shared/auth';
 import { UserPolicyRepository } from '../../shared/repository';
-import { RequestContextManager, ContextUtils } from '../../shared/context';
+import { RequestContextManager } from '../../shared/context';
 import { 
   APIResponse, 
   ErrorResponse, 
@@ -34,10 +34,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
   try {
     // Validate token and initialize context with tracing headers
-    await TokenValidator.validateAndInitializeContextWithTracing(event);
+    let context: RequestContextManager = await TokenValidator.validateAndInitializeContextWithTracing(event, correlationId);
 
     // Log with structured context after authentication
-    const logEntry = ContextUtils.createLogEntry('INFO', 'User Policies API request authenticated and routed', {
+    const logEntry = context.createLogEntry('INFO', 'User Policies API request authenticated and routed', {
       httpMethod: event.httpMethod,
       path: event.path,
       pathParameters: event.pathParameters,
@@ -46,23 +46,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     console.log(JSON.stringify(logEntry));
 
     // Route the request
-    const result = await routeRequest(event);
+    const result = await routeRequest(context, event);
     
     return createSuccessResponse(result);
   } catch (error) {
-    // Log error with full context if available
-    if (RequestContextManager.isInitialized()) {
-      const errorLogEntry = ContextUtils.createLogEntry('ERROR', 'User Policies API Handler error', {
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-        traceId,
-        correlationId,
-        httpMethod: event.httpMethod,
-        path: event.path
-      });
-      console.error(JSON.stringify(errorLogEntry));
-    } else {
-      console.error('User Policies API Handler error (context not initialized):', {
+      console.error('User Policies API Handler error ', {
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
         requestId: event.requestContext.requestId,
@@ -71,15 +59,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         httpMethod: event.httpMethod,
         path: event.path
       });
+      return createErrorResponse(error);
     }
-    return createErrorResponse(error);
-  }
 };
 
 /**
  * Route requests based on HTTP method and path
  */
-async function routeRequest(event: APIGatewayProxyEvent): Promise<any> {
+async function routeRequest(context: RequestContextManager, event: APIGatewayProxyEvent): Promise<any> {
   const { httpMethod, path, queryStringParameters } = event;
 
   // Only allow GET requests for this read-only API
@@ -94,31 +81,31 @@ async function routeRequest(event: APIGatewayProxyEvent): Promise<any> {
   // Route based on query parameters
   if (userEmail && domain) {
     // Get policies for specific user and domain
-    return await getUserPoliciesByUserAndDomain(userEmail, domain);
+    return await getUserPoliciesByUserAndDomain(context, userEmail, domain);
   } else if (userEmail) {
     // Get all policies for a specific user
-    return await getUserPoliciesByUser(userEmail);
+    return await getUserPoliciesByUser(context, userEmail);
   } else if (domain) {
     // Get all policies for a specific domain
-    return await getUserPoliciesByDomain(domain);
+    return await getUserPoliciesByDomain(context, domain);
   } else {
     // Get all user policies for the tenant
-    return await getAllUserPolicies();
+    return await getAllUserPolicies(context);
   }
 }
 
 /**
  * Get all user policies for the current tenant
  */
-async function getAllUserPolicies() {
-  const tenantId = RequestContextManager.getTenantId();
+async function getAllUserPolicies(context: RequestContextManager) {
+  const tenantId = context.getRequestContext().tenantId;
   
-  const logEntry = ContextUtils.createLogEntry('INFO', 'Getting all user policies for tenant');
+  const logEntry = context.createLogEntry('INFO', 'Getting all user policies for tenant');
   console.log(JSON.stringify(logEntry));
   
-  const userPolicies = await UserPolicyRepository.getAllUserPolicies(tenantId);
+  const userPolicies = await UserPolicyRepository.getAllUserPolicies(context, tenantId);
   
-  const resultLogEntry = ContextUtils.createLogEntry('INFO', 'Retrieved all user policies successfully', {
+  const resultLogEntry = context.createLogEntry('INFO', 'Retrieved all user policies successfully', {
     count: userPolicies.length
   });
   console.log(JSON.stringify(resultLogEntry));
@@ -135,17 +122,17 @@ async function getAllUserPolicies() {
 /**
  * Get user policies for a specific user
  */
-async function getUserPoliciesByUser(userEmail: string) {
-  const tenantId = RequestContextManager.getTenantId();
+async function getUserPoliciesByUser(context: RequestContextManager, userEmail: string) {
+  const tenantId = context.getRequestContext().tenantId;
   
-  const logEntry = ContextUtils.createLogEntry('INFO', 'Getting user policies by user email', {
+  const logEntry = context.createLogEntry('INFO', 'Getting user policies by user email', {
     userEmail
   });
   console.log(JSON.stringify(logEntry));
   
-  const userPolicies = await UserPolicyRepository.getUserPolicies(userEmail, tenantId);
+  const userPolicies = await UserPolicyRepository.getUserPolicies(context, userEmail, tenantId);
   
-  const resultLogEntry = ContextUtils.createLogEntry('INFO', 'Retrieved user policies by user successfully', {
+  const resultLogEntry = context.createLogEntry('INFO', 'Retrieved user policies by user successfully', {
     userEmail,
     count: userPolicies.length
   });
@@ -164,17 +151,17 @@ async function getUserPoliciesByUser(userEmail: string) {
 /**
  * Get user policies for a specific domain
  */
-async function getUserPoliciesByDomain(domain: string) {
-  const tenantId = RequestContextManager.getTenantId();
+async function getUserPoliciesByDomain(context: RequestContextManager, domain: string) {
+  const tenantId = context.getRequestContext().tenantId;
   
-  const logEntry = ContextUtils.createLogEntry('INFO', 'Getting user policies by domain', {
+  const logEntry = context.createLogEntry('INFO', 'Getting user policies by domain', {
     domain
   });
   console.log(JSON.stringify(logEntry));
   
-  const userPolicies = await UserPolicyRepository.getUserPoliciesByDomain(domain, tenantId);
+  const userPolicies = await UserPolicyRepository.getUserPoliciesByDomain(context, domain, tenantId);
   
-  const resultLogEntry = ContextUtils.createLogEntry('INFO', 'Retrieved user policies by domain successfully', {
+  const resultLogEntry = context.createLogEntry('INFO', 'Retrieved user policies by domain successfully', {
     domain,
     count: userPolicies.length
   });
@@ -193,20 +180,20 @@ async function getUserPoliciesByDomain(domain: string) {
 /**
  * Get user policies for a specific user and domain combination
  */
-async function getUserPoliciesByUserAndDomain(userEmail: string, domain: string) {
-  const tenantId = RequestContextManager.getTenantId();
+async function getUserPoliciesByUserAndDomain(context: RequestContextManager, userEmail: string, domain: string) {
+  const tenantId = context.getRequestContext().tenantId;
   
-  const logEntry = ContextUtils.createLogEntry('INFO', 'Getting user policies by user and domain', {
+  const logEntry = context.createLogEntry('INFO', 'Getting user policies by user and domain', {
     userEmail,
     domain
   });
   console.log(JSON.stringify(logEntry));
   
   // Get user policies and filter by domain
-  const allUserPolicies = await UserPolicyRepository.getUserPolicies(userEmail, tenantId);
+  const allUserPolicies = await UserPolicyRepository.getUserPolicies(context, userEmail, tenantId);
   const filteredPolicies = allUserPolicies.filter(policy => policy.Destination === domain);
   
-  const resultLogEntry = ContextUtils.createLogEntry('INFO', 'Retrieved user policies by user and domain successfully', {
+  const resultLogEntry = context.createLogEntry('INFO', 'Retrieved user policies by user and domain successfully', {
     userEmail,
     domain,
     count: filteredPolicies.length

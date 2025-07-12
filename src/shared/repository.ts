@@ -2,35 +2,20 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, QueryCommand, PutCommand, UpdateCommand, GetCommand, DeleteCommand, BatchWriteCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { PolicyRecord, Policy, UserPolicyRecord, NotFoundError, ConflictError, Cidr, CidrRecord } from './types';
-import { RequestContextManager, ContextUtils } from './context';
+import { RequestContextManager } from './context';
 import { UserDisplayHelper } from './auth';
 
-/**
- * DynamoDB Repository with automatic tenant isolation
- */
-export class PolicyRepository {
-  private static client: DynamoDBDocumentClient;
-  private static tableName: string;
 
-  /**
-   * Initialize the repository with DynamoDB configuration
-   * Now supports lazy initialization from environment variables
-   */
-  static initialize(tableName?: string, region?: string): void {
+export abstract class RepositoryAbstract {
+
+  static initialize(client: DynamoDBDocumentClient, region?: string): void {
     // Use provided parameters or fall back to environment variables
-    const finalTableName = tableName || process.env.DYNAMODB_TABLE_NAME;
     const finalRegion = region || process.env.AWS_REGION || 'us-east-1';
     
-    if (!finalTableName) {
-      throw new Error('DynamoDB table name must be provided either as parameter or DYNAMODB_TABLE_NAME environment variable');
-    }
-
-    // Skip if already initialized with same configuration
-    if (this.client && this.tableName === finalTableName) {
+    // Skip if already initialized
+    if (client) {
       return;
     }
-
-    this.tableName = finalTableName;
     
     const dynamoClient = new DynamoDBClient({
       region: finalRegion,
@@ -39,69 +24,38 @@ export class PolicyRepository {
       })
     });
 
-    this.client = DynamoDBDocumentClient.from(dynamoClient);
+    client = DynamoDBDocumentClient.from(dynamoClient);
 
-    console.log('PolicyRepository initialized for region:', finalRegion, 'tableName:', finalTableName);
+    console.log('PolicyRepository initialized for region:', finalRegion);
   }
 
-  /**
-   * Get all CIDR blacklist entries for the current tenant
-   * Automatically initializes if not already done (lazy initialization)
-   */
-  static async getAllCidr(): Promise<Cidr[]> {
-    // Lazy initialization - automatically initialize if not done yet
-    if (!this.client) {
-      this.initialize();
-    }
+}
 
-    const tenantId = RequestContextManager.getTenantId();
-    
-    console.log(ContextUtils.createLogEntry('INFO', 'Fetching all Cidrs', { tenantId }));
 
-    const command = new QueryCommand({
-      TableName: 'IpCidrBlackList', // Use the correct CIDR table
-      IndexName: 'TenantID-Created-Index',
-      KeyConditionExpression: 'TenantID = :tenantId',
-      ExpressionAttributeValues: {
-        ':tenantId': tenantId
-      },
-      ScanIndexForward: false // Most recent first
-    });
-
-    try {
-      const result = await this.client.send(command);
-      const cidrs = (result.Items || []).map(item => this.mapRecordToCidr(item as CidrRecord));
-      
-      console.log(ContextUtils.createLogEntry('INFO', 'Successfully fetched Cidrs', { 
-        count: cidrs.length 
-      }));
-
-      return cidrs;
-    } catch (error) {
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to fetch cidrs', { 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      }));
-      throw new Error('Failed to retrieve cidrs');
-    }
-  }
+/**
+ * DynamoDB Policy Repository 
+ */
+export class PolicyRepository extends RepositoryAbstract {
+  private static client: DynamoDBDocumentClient;
+  private static readonly PoliciesTableName = 'Policies-${environment}';
 
 
   /**
    * Get all policies for the current tenant
    * Automatically initializes if not already done (lazy initialization)
    */
-  static async getAllPolicies(): Promise<Policy[]> {
+  static async getAllPolicies(context: RequestContextManager): Promise<Policy[]> {
     // Lazy initialization - automatically initialize if not done yet
     if (!this.client) {
-      this.initialize();
+      this.initialize(this.client);
     }
 
-    const tenantId = RequestContextManager.getTenantId();
+    const tenantId = context.getRequestContext().tenantId
     
-    console.log(ContextUtils.createLogEntry('INFO', 'Fetching all policies', { tenantId }));
+    console.log(context.createLogEntry('INFO', 'Fetching all policies', { tenantId }));
 
     const command = new QueryCommand({
-      TableName: this.tableName,
+      TableName: this.PoliciesTableName,
       IndexName: 'TenantID-Created-Index',
       KeyConditionExpression: 'TenantID = :tenantId',
       FilterExpression: '#state <> :deletedState',
@@ -117,15 +71,15 @@ export class PolicyRepository {
 
     try {
       const result = await this.client.send(command);
-      const policies = (result.Items || []).map(item => this.mapRecordToPolicy(item as PolicyRecord));
+      const policies = (result.Items || []).map(item => this.mapRecordToPolicy(context, item as PolicyRecord));
       
-      console.log(ContextUtils.createLogEntry('INFO', 'Successfully fetched policies', { 
+      console.log(context.createLogEntry('INFO', 'Successfully fetched policies', { 
         count: policies.length 
       }));
 
       return policies;
     } catch (error) {
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to fetch policies', { 
+      console.error(context.createLogEntry('ERROR', 'Failed to fetch policies', { 
         error: error instanceof Error ? error.message : 'Unknown error' 
       }));
       throw new Error('Failed to retrieve policies');
@@ -136,18 +90,18 @@ export class PolicyRepository {
    * Get a specific policy by ID (with tenant validation)
    * Automatically initializes if not already done (lazy initialization)
    */
-  static async getPolicyById(policyId: string): Promise<Policy> {
+  static async getPolicyById(context: RequestContextManager, policyId: string): Promise<Policy> {
     // Lazy initialization - automatically initialize if not done yet
     if (!this.client) {
-      this.initialize();
+      this.initialize(this.client);
     }
 
-    const tenantId = RequestContextManager.getTenantId();
+    const tenantId = context.getRequestContext().tenantId;
     
-    console.log(ContextUtils.createLogEntry('INFO', 'Fetching policy by ID', { policyId }));
+    console.log(context.createLogEntry('INFO', 'Fetching policy by ID', { policyId }));
 
     const command = new GetCommand({
-      TableName: this.tableName,
+      TableName: this.PoliciesTableName,
       Key: {
         PK: `TENANT#${tenantId}`,
         SK: `POLICY#${policyId}`
@@ -162,18 +116,17 @@ export class PolicyRepository {
       }
 
       const record = result.Item as PolicyRecord;
-      
       // Validate tenant access
-      ContextUtils.validateTenantAccess(record.TenantID);
+      context.validateTenantAccess(record.TenantID);
       
       // Check if policy is deleted
       if (record.State === 'deleted') {
         throw new NotFoundError(`Policy with ID ${policyId} not found`);
       }
 
-      const policy = this.mapRecordToPolicy(record);
+      const policy = this.mapRecordToPolicy(context, record);
       
-      console.log(ContextUtils.createLogEntry('INFO', 'Successfully fetched policy', { policyId }));
+      console.log(context.createLogEntry('INFO', 'Successfully fetched policy', { policyId }));
       
       return policy;
     } catch (error) {
@@ -181,7 +134,7 @@ export class PolicyRepository {
         throw error;
       }
       
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to fetch policy', { 
+      console.error(context.createLogEntry('ERROR', 'Failed to fetch policy', { 
         policyId,
         error: error instanceof Error ? error.message : 'Unknown error' 
       }));
@@ -193,13 +146,12 @@ export class PolicyRepository {
    * Create a new policy
    * Automatically initializes if not already done (lazy initialization)
    */
-  static async createPolicy(policyData: Omit<Policy, '_id' | 'created' | 'updated' | 'createdBy' | 'updatedBy'>): Promise<Policy> {
+  static async createPolicy(context: RequestContextManager, policyData: Omit<Policy, '_id' | 'created' | 'updated' | 'createdBy' | 'updatedBy'>): Promise<Policy> {
     // Lazy initialization - automatically initialize if not done yet
     if (!this.client) {
-      this.initialize();
+      this.initialize(this.client);
     }
 
-    const context = RequestContextManager.getFullContext();
     const policyId = uuidv4();
     const timestamp = new Date().toISOString();
 
@@ -208,30 +160,30 @@ export class PolicyRepository {
       ...policyData,
       created: timestamp,
       updated: timestamp,
-      createdBy: context.username,
-      updatedBy: context.username
+      createdBy: context.getRequestContext().username,
+      updatedBy: context.getRequestContext().username
     };
 
     const record: PolicyRecord = {
-      PK: `TENANT#${context.tenantId}`,
+      PK: `TENANT#${context.getRequestContext().tenantId}`,
       SK: `POLICY#${policyId}`,
       PolicyID: policyId,
-      TenantID: context.tenantId,
+      TenantID: context.getRequestContext().tenantId,
       PolicyContent: JSON.stringify(policy),
       State: 'created',
       Created: timestamp,
       Updated: timestamp,
-      CreatedBy: context.username,
-      UpdatedBy: context.username
+      CreatedBy: context.getRequestContext().username,
+      UpdatedBy: context.getRequestContext().username
     };
 
-    console.log(ContextUtils.createLogEntry('INFO', 'Creating new policy', { 
+    console.log(context.createLogEntry('INFO', 'Creating new policy', { 
       policyId,
       policyName: policy.name 
     }));
 
     const command = new PutCommand({
-      TableName: this.tableName,
+      TableName: this.PoliciesTableName,
       Item: record,
       ConditionExpression: 'attribute_not_exists(PK)' // Prevent overwrites
     });
@@ -239,7 +191,7 @@ export class PolicyRepository {
     try {
       await this.client.send(command);
       
-      console.log(ContextUtils.createLogEntry('INFO', 'Successfully created policy', { policyId }));
+      console.log(context.createLogEntry('INFO', 'Successfully created policy', { policyId }));
       
       return policy;
     } catch (error: any) {
@@ -247,7 +199,7 @@ export class PolicyRepository {
         throw new ConflictError(`Policy with ID ${policyId} already exists`);
       }
       
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to create policy', { 
+      console.error(context.createLogEntry('ERROR', 'Failed to create policy', { 
         policyId,
         error: error instanceof Error ? error.message : 'Unknown error' 
       }));
@@ -258,12 +210,16 @@ export class PolicyRepository {
   /**
    * Update an existing policy
    */
-  static async updatePolicy(policyId: string, updates: Partial<Omit<Policy, '_id' | 'created' | 'createdBy'>>): Promise<Policy> {
-    const context = RequestContextManager.getFullContext();
+  static async updatePolicy(context: RequestContextManager, policyId: string, updates: Partial<Omit<Policy, '_id' | 'created' | 'createdBy'>>): Promise<Policy> {
+
+    // Lazy initialization - automatically initialize if not done yet
+    if (!this.client) {
+      this.initialize(this.client);
+    }
     const timestamp = new Date().toISOString();
 
     // First, get the existing policy to validate access and get current data
-    const existingPolicy = await this.getPolicyById(policyId);
+    const existingPolicy = await this.getPolicyById(context, policyId);
 
     // Merge updates with existing policy
     const updatedPolicy: Policy = {
@@ -273,24 +229,24 @@ export class PolicyRepository {
       created: existingPolicy.created, // Preserve creation timestamp
       createdBy: existingPolicy.createdBy, // Preserve original creator
       updated: timestamp,
-      updatedBy: context.username
+      updatedBy: context.getRequestContext().username
     };
 
     const record: Partial<PolicyRecord> = {
       PolicyContent: JSON.stringify(updatedPolicy),
       Updated: timestamp,
-      UpdatedBy: context.username
+      UpdatedBy: context.getRequestContext().username
     };
 
-    console.log(ContextUtils.createLogEntry('INFO', 'Updating policy', { 
+    console.log(context.createLogEntry('INFO', 'Updating policy', { 
       policyId,
       updates: Object.keys(updates) 
     }));
 
     const command = new UpdateCommand({
-      TableName: this.tableName,
+      TableName: this.PoliciesTableName,
       Key: {
-        PK: `TENANT#${context.tenantId}`,
+        PK: `TENANT#${context.getRequestContext().tenantId}`,
         SK: `POLICY#${policyId}`
       },
       UpdateExpression: 'SET PolicyContent = :content, Updated = :updated, UpdatedBy = :updatedBy',
@@ -302,7 +258,7 @@ export class PolicyRepository {
         ':content': record.PolicyContent,
         ':updated': record.Updated,
         ':updatedBy': record.UpdatedBy,
-        ':tenantId': context.tenantId,
+        ':tenantId': context.getRequestContext().tenantId,
         ':deletedState': 'deleted'
       }
     });
@@ -310,7 +266,7 @@ export class PolicyRepository {
     try {
       await this.client.send(command);
       
-      console.log(ContextUtils.createLogEntry('INFO', 'Successfully updated policy', { policyId }));
+      console.log(context.createLogEntry('INFO', 'Successfully updated policy', { policyId }));
       
       return updatedPolicy;
     } catch (error: any) {
@@ -318,7 +274,7 @@ export class PolicyRepository {
         throw new NotFoundError(`Policy with ID ${policyId} not found or access denied`);
       }
       
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to update policy', { 
+      console.error(context.createLogEntry('ERROR', 'Failed to update policy', { 
         policyId,
         error: error instanceof Error ? error.message : 'Unknown error' 
       }));
@@ -329,19 +285,23 @@ export class PolicyRepository {
   /**
    * Soft delete a policy (mark as deleted)
    */
-  static async deletePolicy(policyId: string): Promise<void> {
-    const context = RequestContextManager.getFullContext();
+  static async deletePolicy(context: RequestContextManager, policyId: string): Promise<void> {
+
+    // Lazy initialization - automatically initialize if not done yet
+    if (!this.client) {
+      this.initialize(this.client);
+    }
     const timestamp = new Date().toISOString();
 
     // Validate policy exists and user has access
-    await this.getPolicyById(policyId);
+    await this.getPolicyById(context, policyId);
 
-    console.log(ContextUtils.createLogEntry('INFO', 'Deleting policy', { policyId }));
+    console.log(context.createLogEntry('INFO', 'Deleting policy', { policyId }));
 
     const command = new UpdateCommand({
-      TableName: this.tableName,
+      TableName: this.PoliciesTableName,
       Key: {
-        PK: `TENANT#${context.tenantId}`,
+        PK: `TENANT#${context.getRequestContext().tenantId}`,
         SK: `POLICY#${policyId}`
       },
       UpdateExpression: 'SET #state = :deletedState, Updated = :updated, UpdatedBy = :updatedBy',
@@ -352,21 +312,21 @@ export class PolicyRepository {
       ExpressionAttributeValues: {
         ':deletedState': 'deleted',
         ':updated': timestamp,
-        ':updatedBy': context.username,
-        ':tenantId': context.tenantId
+        ':updatedBy': context.getRequestContext().username,
+        ':tenantId': context.getRequestContext().tenantId
       }
     });
 
     try {
       await this.client.send(command);
       
-      console.log(ContextUtils.createLogEntry('INFO', 'Successfully deleted policy', { policyId }));
+      console.log(context.createLogEntry('INFO', 'Successfully deleted policy', { policyId }));
     } catch (error: any) {
       if (error.name === 'ConditionalCheckFailedException') {
         throw new NotFoundError(`Policy with ID ${policyId} not found or access denied`);
       }
       
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to delete policy', { 
+      console.error(context.createLogEntry('ERROR', 'Failed to delete policy', { 
         policyId,
         error: error instanceof Error ? error.message : 'Unknown error' 
       }));
@@ -377,19 +337,23 @@ export class PolicyRepository {
   /**
    * Update policy state (for workflow management)
    */
-  static async updatePolicyState(policyId: string, newState: PolicyRecord['State']): Promise<void> {
-    const context = RequestContextManager.getFullContext();
+  static async updatePolicyState(context: RequestContextManager, policyId: string, newState: PolicyRecord['State']): Promise<void> {
+    
+    // Lazy initialization - automatically initialize if not done yet
+    if (!this.client) {
+      this.initialize(this.client);
+    }
     const timestamp = new Date().toISOString();
 
-    console.log(ContextUtils.createLogEntry('INFO', 'Updating policy state', { 
+    console.log(context.createLogEntry('INFO', 'Updating policy state', { 
       policyId,
       newState 
     }));
 
     const command = new UpdateCommand({
-      TableName: this.tableName,
+      TableName: this.PoliciesTableName,
       Key: {
-        PK: `TENANT#${context.tenantId}`,
+        PK: `TENANT#${context.getRequestContext().tenantId}`,
         SK: `POLICY#${policyId}`
       },
       UpdateExpression: 'SET #state = :newState, Updated = :updated, UpdatedBy = :updatedBy',
@@ -400,15 +364,15 @@ export class PolicyRepository {
       ExpressionAttributeValues: {
         ':newState': newState,
         ':updated': timestamp,
-        ':updatedBy': context.username,
-        ':tenantId': context.tenantId
+        ':updatedBy': context.getRequestContext().username,
+        ':tenantId': context.getRequestContext().tenantId
       }
     });
 
     try {
       await this.client.send(command);
       
-      console.log(ContextUtils.createLogEntry('INFO', 'Successfully updated policy state', { 
+      console.log(context.createLogEntry('INFO', 'Successfully updated policy state', { 
         policyId,
         newState 
       }));
@@ -417,7 +381,7 @@ export class PolicyRepository {
         throw new NotFoundError(`Policy with ID ${policyId} not found or access denied`);
       }
       
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to update policy state', { 
+      console.error(context.createLogEntry('ERROR', 'Failed to update policy state', { 
         policyId,
         newState,
         error: error instanceof Error ? error.message : 'Unknown error' 
@@ -429,19 +393,69 @@ export class PolicyRepository {
   /**
    * Map DynamoDB record to Policy object
    */
-  private static mapRecordToPolicy(record: PolicyRecord): Policy {
+  private static mapRecordToPolicy(context: RequestContextManager, record: PolicyRecord): Policy {
     try {
       const policy = JSON.parse(record.PolicyContent) as Policy;
       // Transform user IDs to display names for better readability
       return UserDisplayHelper.transformUserFields(policy);
     } catch (error) {
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to parse policy content', { 
+      console.error(context.createLogEntry('ERROR', 'Failed to parse policy content', { 
         policyId: record.PolicyID,
         error: error instanceof Error ? error.message : 'Unknown error' 
       }));
       throw new Error('Invalid policy data format');
     }
   }
+
+
+  /**
+   * Get policies by state (for administrative purposes)
+   */
+  static async getPoliciesByState(context: RequestContextManager, state: PolicyRecord['State']): Promise<Policy[]> {
+    const tenantId = context.getRequestContext().tenantId;
+    
+    console.log(context.createLogEntry('INFO', 'Fetching policies by state', { 
+      state,
+      tenantId 
+    }));
+
+    const command = new QueryCommand({
+      TableName: this.PoliciesTableName,
+      IndexName: 'TenantID-Created-Index',
+      KeyConditionExpression: 'TenantID = :tenantId',
+      FilterExpression: '#state = :state',
+      ExpressionAttributeNames: {
+        '#state': 'State'
+      },
+      ExpressionAttributeValues: {
+        ':tenantId': tenantId,
+        ':state': state
+      }
+    });
+
+    try {
+      const result = await this.client.send(command);
+      const policies = (result.Items || []).map(item => this.mapRecordToPolicy(context, item as PolicyRecord));
+      
+      console.log(context.createLogEntry('INFO', 'Successfully fetched policies by state', { 
+        state,
+        count: policies.length 
+      }));
+
+      return policies;
+    } catch (error) {
+      console.error(context.createLogEntry('ERROR', 'Failed to fetch policies by state', { 
+        state,
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }));
+      throw new Error('Failed to retrieve policies by state');
+    }
+  }
+}
+
+export class CIDRRepository  extends RepositoryAbstract {
+  private static client: DynamoDBDocumentClient;
+  private static readonly IpCIDRTableName = 'IpCidrBlackList-${environment}';
 
   /**
    * Map DynamoDB record to Cidr object
@@ -457,100 +471,70 @@ export class PolicyRepository {
         updatedBy: record.UpdatedBy
       };
     } catch (error) {
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to map cidr record', { 
+      console.error('ERROR', 'Failed to map cidr record', { 
         error: error instanceof Error ? error.message : 'Unknown error' 
-      }));
+      });
       throw new Error('Invalid cidr data format');
     }
   }
 
-
   /**
-   * Get policies by state (for administrative purposes)
+   * Get all CIDR blacklist entries for the current tenant
+   * Automatically initializes if not already done (lazy initialization)
    */
-  static async getPoliciesByState(state: PolicyRecord['State']): Promise<Policy[]> {
-    const tenantId = RequestContextManager.getTenantId();
+  static async getAllCidr(tenantId: string): Promise<Cidr[]> {
+    // Lazy initialization - automatically initialize if not done yet
+    if (!this.client) {
+      this.initialize(this.client);
+    }
     
-    console.log(ContextUtils.createLogEntry('INFO', 'Fetching policies by state', { 
-      state,
-      tenantId 
-    }));
+    console.log('INFO', 'Fetching all Cidrs', { tenantId });
 
     const command = new QueryCommand({
-      TableName: this.tableName,
+      TableName: this.IpCIDRTableName,
       IndexName: 'TenantID-Created-Index',
       KeyConditionExpression: 'TenantID = :tenantId',
-      FilterExpression: '#state = :state',
-      ExpressionAttributeNames: {
-        '#state': 'State'
-      },
       ExpressionAttributeValues: {
-        ':tenantId': tenantId,
-        ':state': state
-      }
+        ':tenantId': tenantId
+      },
+      ScanIndexForward: false // Most recent first
     });
 
     try {
       const result = await this.client.send(command);
-      const policies = (result.Items || []).map(item => this.mapRecordToPolicy(item as PolicyRecord));
+      const cidrs = (result.Items || []).map(item => this.mapRecordToCidr(item as CidrRecord));
       
-      console.log(ContextUtils.createLogEntry('INFO', 'Successfully fetched policies by state', { 
-        state,
-        count: policies.length 
-      }));
+      console.log('INFO', 'Successfully fetched Cidrs', { 
+        count: cidrs.length 
+      });
 
-      return policies;
+      return cidrs;
     } catch (error) {
-      console.error(ContextUtils.createLogEntry('ERROR', 'Failed to fetch policies by state', { 
-        state,
+      console.error('ERROR', 'Failed to fetch cidrs', { 
         error: error instanceof Error ? error.message : 'Unknown error' 
-      }));
-      throw new Error('Failed to retrieve policies by state');
+      });
+      throw new Error('Failed to retrieve cidrs');
     }
   }
+
 }
+
 
 /**
  * UserPolicy Repository for managing individual policy rules
  */
-export class UserPolicyRepository {
+export class UserPolicyRepository  extends RepositoryAbstract {
   private static client: DynamoDBDocumentClient;
-  private static tableName: string;
+  private static readonly UserPoliciesTableName = 'UserPolicies-${environment}';
 
-  /**
-   * Initialize the repository with DynamoDB configuration
-   */
-  static initialize(tableName?: string, region?: string): void {
-    // Use provided parameters or fall back to environment variables
-    const finalTableName = tableName || process.env.USER_POLICIES_TABLE_NAME || 'UserPolicies';
-    const finalRegion = region || process.env.AWS_REGION || 'us-east-1';
-
-    // Skip if already initialized with same configuration
-    if (this.client && this.tableName === finalTableName) {
-      return;
-    }
-
-    this.tableName = finalTableName;
-    
-    const dynamoClient = new DynamoDBClient({
-      region: finalRegion,
-      ...(process.env.NODE_ENV === 'development' && {
-        endpoint: process.env.DYNAMODB_ENDPOINT || 'http://localhost:8000'
-      })
-    });
-
-    this.client = DynamoDBDocumentClient.from(dynamoClient);
-
-    console.log('UserPolicyRepository initialized for region:', finalRegion, 'tableName:', finalTableName);
-  }
 
   /**
    * Save policy rules to UserPolicies table
    */
-  static async savePolicyRules(policy: Policy, tenantId: string, triggeredBy: string): Promise<void> {
+  static async savePolicyRules(context: RequestContextManager, policy: Policy, tenantId: string, triggeredBy: string): Promise<void> {
     // Lazy initialization
     if (!this.client) {
-      this.initialize();
+      this.initialize(this.client);
     }
 
     const timestamp = new Date().toISOString();
@@ -563,7 +547,7 @@ export class UserPolicyRepository {
     });
 
     // First, delete existing rules for this policy to handle updates
-    await this.deletePolicyRules(policy._id, tenantId);
+    await this.deletePolicyRules(context, policy._id, tenantId);
 
     if (policy.rules.length === 0) {
       console.log('No rules to save for policy', { policyId: policy._id });
@@ -603,7 +587,7 @@ export class UserPolicyRepository {
       
       const command = new BatchWriteCommand({
         RequestItems: {
-          [this.tableName]: batch.map(record => ({
+          [this.UserPoliciesTableName]: batch.map(record => ({
             PutRequest: {
               Item: record
             }
@@ -639,10 +623,10 @@ export class UserPolicyRepository {
   /**
    * Delete policy rules from UserPolicies table
    */
-  static async deletePolicyRules(policyId: string, tenantId: string): Promise<void> {
+  static async deletePolicyRules(context: RequestContextManager, policyId: string, tenantId: string): Promise<void> {
     // Lazy initialization
     if (!this.client) {
-      this.initialize();
+      this.initialize(this.client);
     }
 
     console.log('Deleting policy rules from UserPolicies table', {
@@ -679,10 +663,10 @@ export class UserPolicyRepository {
   /**
    * Get user policies by user email
    */
-  static async getUserPolicies(userEmail: string, tenantId: string): Promise<UserPolicyRecord[]> {
+  static async getUserPolicies(context: RequestContextManager, userEmail: string, tenantId: string): Promise<UserPolicyRecord[]> {
     // Lazy initialization
     if (!this.client) {
-      this.initialize();
+      this.initialize(this.client);
     }
 
     console.log('Getting user policies', {
@@ -692,7 +676,7 @@ export class UserPolicyRepository {
 
     // Query by PK prefix to get all policies for this user
     const command = new QueryCommand({
-      TableName: this.tableName,
+      TableName: this.UserPoliciesTableName,
       KeyConditionExpression: 'begins_with(PK, :pkPrefix)',
       FilterExpression: 'TenantID = :tenantId',
       ExpressionAttributeValues: {
@@ -725,10 +709,10 @@ export class UserPolicyRepository {
   /**
    * Get all user policies for a tenant
    */
-  static async getAllUserPolicies(tenantId: string): Promise<UserPolicyRecord[]> {
+  static async getAllUserPolicies(context: RequestContextManager, tenantId: string): Promise<UserPolicyRecord[]> {
     // Lazy initialization
     if (!this.client) {
-      this.initialize();
+      this.initialize(this.client);
     }
 
     console.log('Getting all user policies for tenant', {
@@ -737,7 +721,7 @@ export class UserPolicyRepository {
 
     // Use Scan operation with FilterExpression since we need to filter by tenant prefix
     const command = new ScanCommand({
-      TableName: this.tableName,
+      TableName: this.UserPoliciesTableName,
       FilterExpression: 'begins_with(PK, :tenantPrefix)',
       ExpressionAttributeValues: {
         ':tenantPrefix': `${tenantId}#`
@@ -766,10 +750,10 @@ export class UserPolicyRepository {
   /**
    * Get user policies by destination domain
    */
-  static async getUserPoliciesByDomain(domain: string, tenantId: string): Promise<UserPolicyRecord[]> {
+  static async getUserPoliciesByDomain(context: RequestContextManager, domain: string, tenantId: string): Promise<UserPolicyRecord[]> {
     // Lazy initialization
     if (!this.client) {
-      this.initialize();
+      this.initialize(this.client);
     }
 
     console.log('Getting user policies by domain', {
@@ -779,7 +763,7 @@ export class UserPolicyRepository {
 
     // Query by PK suffix to get all policies for this domain
     const command = new QueryCommand({
-      TableName: this.tableName,
+      TableName: this.UserPoliciesTableName,
       KeyConditionExpression: 'begins_with(PK, :tenantPrefix) AND ends_with(PK, :domainSuffix)',
       FilterExpression: 'TenantID = :tenantId',
       ExpressionAttributeValues: {
